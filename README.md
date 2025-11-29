@@ -55,11 +55,12 @@ flight/
 
 1. **Clone the repository**
    ```bash
-   cd flight
+   cd flight_db_proj
    ```
 
 2. **Create virtual environment**
    ```bash
+   conda activate
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
