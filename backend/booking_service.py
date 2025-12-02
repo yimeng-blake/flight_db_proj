@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Optional
 import random
 import string
+import time
+import psycopg2
 from psycopg2.extras import RealDictCursor
 from database import (
     Booking, Flight, Passenger, Seat, Payment, FrequentFlyer,
@@ -237,7 +239,32 @@ class BookingService:
         """
         db_manager = get_db_manager()
 
-        # Use SERIALIZABLE isolation to prevent race conditions
+        # Retry logic for serialization failures
+        max_retries = 5
+        retry_delay = 0.01  # Start with 10ms delay
+
+        for attempt in range(max_retries):
+            try:
+                # Use SERIALIZABLE isolation to prevent race conditions
+                return BookingService._create_booking_transaction(
+                    db_manager, passenger_id, flight_id, seat_class, specific_seat, auto_assign
+                )
+            except psycopg2.extensions.TransactionRollbackError as e:
+                # Serialization failure - retry
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+                    continue
+                else:
+                    raise ValueError("Unable to complete booking due to high concurrency. Please try again.")
+            except Exception:
+                # Other errors should not be retried
+                raise
+
+    @staticmethod
+    def _create_booking_transaction(db_manager, passenger_id: int, flight_id: int,
+                                    seat_class: SeatClass, specific_seat: Optional[str],
+                                    auto_assign: bool):
+        """Internal method to perform the actual booking transaction"""
         with db_manager.serializable_transaction() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Get passenger
@@ -1343,6 +1370,25 @@ class BookingService:
         """
         db_manager = get_db_manager()
 
+        # Retry logic for serialization failures
+        max_retries = 5
+        retry_delay = 0.01
+
+        for attempt in range(max_retries):
+            try:
+                return BookingService._change_seat_transaction(db_manager, booking_id, new_seat_number)
+            except psycopg2.extensions.TransactionRollbackError:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (2 ** attempt))
+                    continue
+                else:
+                    raise ValueError("Unable to change seat due to high concurrency. Please try again.")
+            except Exception:
+                raise
+
+    @staticmethod
+    def _change_seat_transaction(db_manager, booking_id: int, new_seat_number: str):
+        """Internal method to perform the seat change transaction"""
         with db_manager.serializable_transaction() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Get booking with current seat

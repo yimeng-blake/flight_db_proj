@@ -329,17 +329,19 @@ class TestConcurrentBooking:
         assert updated_flight.available_economy == 0
 
         # Verify all economy seats for this flight are taken
-        from database import Seat, get_session
-        session = get_session()
-        try:
-            available_seats = session.query(Seat).filter(
-                Seat.flight_id == flight.id,
-                Seat.seat_class == SeatClass.ECONOMY,
-                Seat.is_available == True
-            ).count()
+        from database import get_db_manager
+        db = get_db_manager()
+
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM seats
+                WHERE flight_id = %s
+                  AND seat_class = %s
+                  AND is_available = TRUE
+            """, (flight.id, SeatClass.ECONOMY.value))
+            row = cursor.fetchone()
+            available_seats = row['count']
             assert available_seats == 0, "Some seats still marked as available!"
-        finally:
-            session.close()
 
     def test_concurrent_seat_changes(self, db_manager, test_aircraft):
         """Test concurrent seat change operations"""
@@ -372,16 +374,21 @@ class TestConcurrentBooking:
             bookings.append(booking)
 
         # Get available seats for swapping
-        from database import Seat, get_session
-        session = get_session()
-        try:
-            available_seats = session.query(Seat).filter(
-                Seat.flight_id == flight.id,
-                Seat.seat_class == SeatClass.ECONOMY,
-                Seat.is_available == True
-            ).limit(5).all()
-        finally:
-            session.close()
+        from database import get_db_manager, row_to_seat
+        db = get_db_manager()
+
+        available_seats = []
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, flight_id, seat_number, seat_class, is_available
+                FROM seats
+                WHERE flight_id = %s
+                  AND seat_class = %s
+                  AND is_available = TRUE
+                LIMIT 5
+            """, (flight.id, SeatClass.ECONOMY.value))
+            rows = cursor.fetchall()
+            available_seats = [row_to_seat(row) for row in rows]
 
         # Try to change seats concurrently
         def change_seat(booking_id, seat_number):

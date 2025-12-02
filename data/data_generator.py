@@ -142,7 +142,8 @@ class DataGenerator:
                     date_of_birth = self.faker.date_of_birth(minimum_age=18, maximum_age=80)
                     passport_number = self.faker.bothify(text='??######', letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ')
                     nationality = self.faker.country()
-                    phone = self.faker.phone_number()
+                    # Generate phone number that fits in varchar(20)
+                    phone = self.faker.bothify(text='+1-###-###-####')[:20]
                     address = self.faker.address()
 
                     passenger = PassengerService.create_passenger(

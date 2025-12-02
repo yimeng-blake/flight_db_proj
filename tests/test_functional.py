@@ -219,22 +219,26 @@ class TestBookingService:
         old_seat = booking.seat.seat_number
 
         # Find another available economy seat
-        from database import Seat, get_session
-        session = get_session()
-        try:
-            new_seat = session.query(Seat).filter(
-                Seat.flight_id == test_flight.id,
-                Seat.seat_class == SeatClass.ECONOMY,
-                Seat.is_available == True,
-                Seat.seat_number != old_seat
-            ).first()
+        from database import get_db_manager, row_to_seat
+        db = get_db_manager()
 
-            if new_seat:
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, flight_id, seat_number, seat_class, is_available
+                FROM seats
+                WHERE flight_id = %s
+                  AND seat_class = %s
+                  AND is_available = TRUE
+                  AND seat_number != %s
+                LIMIT 1
+            """, (test_flight.id, SeatClass.ECONOMY.value, old_seat))
+
+            row = cursor.fetchone()
+            if row:
+                new_seat = row_to_seat(row)
                 updated = BookingService.change_seat(booking.id, new_seat.seat_number)
                 assert updated.seat.seat_number == new_seat.seat_number
                 assert updated.seat.seat_number != old_seat
-        finally:
-            session.close()
 
 
 class TestPaymentService:
@@ -287,24 +291,31 @@ class TestPaymentService:
             )
 
         # Check booking was cancelled and seat released
-        from database import get_session
-        session = get_session()
-        try:
-            updated_booking = session.query(type(booking)).filter_by(id=booking.id).first()
-            assert updated_booking.status == BookingStatus.CANCELLED
+        from database import get_db_manager
+        db = get_db_manager()
+
+        with db.get_cursor() as cursor:
+            # Check booking status
+            cursor.execute("""
+                SELECT status FROM bookings WHERE id = %s
+            """, (booking.id,))
+            row = cursor.fetchone()
+            assert row['status'] == BookingStatus.CANCELLED.value
 
             # Check seat is available again
-            updated_seat = session.query(type(booking.seat)).filter_by(
-                flight_id=test_flight.id,
-                seat_number=seat_number
-            ).first()
-            assert updated_seat.is_available == True
+            cursor.execute("""
+                SELECT is_available FROM seats
+                WHERE flight_id = %s AND seat_number = %s
+            """, (test_flight.id, seat_number))
+            row = cursor.fetchone()
+            assert row['is_available'] == True
 
             # Check availability restored
-            updated_flight = session.query(type(test_flight)).filter_by(id=test_flight.id).first()
-            assert updated_flight.available_economy == initial_available
-        finally:
-            session.close()
+            cursor.execute("""
+                SELECT available_economy FROM flights WHERE id = %s
+            """, (test_flight.id,))
+            row = cursor.fetchone()
+            assert row['available_economy'] == initial_available
 
     def test_loyalty_points_awarded(self, db_manager, test_passenger, test_flight):
         """Test loyalty points are awarded on successful booking"""
