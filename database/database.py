@@ -113,8 +113,14 @@ class DatabaseManager:
         if self.connection_pool:
             self.connection_pool.closeall()
 
-    def create_tables(self):
-        """Create all database tables from schema"""
+    def create_tables(self, force: bool = False):
+        """Create all database tables from schema without destroying data.
+
+        By default this method becomes a no-op when the tables already exist,
+        preventing the destructive ``DROP TABLE`` statements in ``schema.sql``
+        from wiping out data every time the application starts.  Pass
+        ``force=True`` when you explicitly want to recreate the schema.
+        """
         schema_file = Path(__file__).parent / 'schema.sql'
 
         if not schema_file.exists():
@@ -126,6 +132,20 @@ class DatabaseManager:
         conn = self.get_connection()
         try:
             with conn.cursor() as cursor:
+                if not force:
+                    cursor.execute(
+                        """
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables
+                            WHERE table_schema = 'public'
+                            AND table_name = 'users'
+                        )
+                        """
+                    )
+                    tables_exist = cursor.fetchone()[0]
+                    if tables_exist:
+                        return
+
                 cursor.execute(schema_sql)
             conn.commit()
         finally:
