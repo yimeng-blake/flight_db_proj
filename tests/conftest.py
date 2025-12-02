@@ -71,16 +71,17 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope='function')
-def db_manager(tmp_path_factory):
-    """Create a test database manager with an isolated SQLite file."""
-    db_dir = tmp_path_factory.mktemp('db')
-    db_path = db_dir / 'test.db'
-    db = DatabaseManager(database_url=f'sqlite:///{db_path}', echo=False)
+def db_manager():
+    """Create a test database manager with PostgreSQL test database."""
+    # Use environment variable or default to local test database
+    test_db_url = os.getenv('TEST_DATABASE_URL', 'postgresql://localhost/airline_reservation_test')
+    db = DatabaseManager(database_url=test_db_url, echo=False)
+    db.drop_tables()  # Clean slate for each test
     db.create_tables()
     set_db_manager(db)
     yield db
     set_db_manager(None)
-    db.drop_tables()
+    db.drop_tables()  # Cleanup after test
 
 
 @pytest.fixture(scope='function')

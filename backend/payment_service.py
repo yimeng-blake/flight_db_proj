@@ -6,8 +6,13 @@ from datetime import datetime
 import random
 import string
 from typing import Optional
-from sqlalchemy.orm import joinedload
-from database import Payment, Booking, PaymentStatus, BookingStatus, Passenger
+from psycopg2.extras import RealDictCursor
+from database import (
+    Payment, Booking, PaymentStatus, BookingStatus, Passenger,
+    User, Seat, Flight, FrequentFlyer, SeatClass, LoyaltyTier,
+    row_to_payment, row_to_booking, row_to_passenger, row_to_user,
+    row_to_seat, row_to_flight, row_to_frequent_flyer
+)
 from database.database import get_db_manager
 from .booking_service import BookingService
 
@@ -129,111 +134,224 @@ class PaymentService:
         failure_error: Optional[ValueError] = None
 
         # Start a SERIALIZABLE transaction to ensure atomicity
-        with db_manager.serializable_session() as session:
-            # Get booking with relationships eagerly loaded so it's usable after session closes
-            booking = session.query(Booking).options(
-                joinedload(Booking.passenger).joinedload(Passenger.user),
-                joinedload(Booking.seat),
-                joinedload(Booking.flight)
-            ).filter_by(id=booking_id).first()
-            if not booking:
-                raise ValueError(f"Booking with ID {booking_id} not found")
+        with db_manager.serializable_transaction() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Get booking with relationships via JOIN query
+                cursor.execute("""
+                    SELECT
+                        b.id as booking_id, b.booking_reference, b.passenger_id, b.flight_id,
+                        b.seat_id, b.seat_class, b.price, b.status, b.booking_date, b.updated_at as booking_updated_at,
+                        p.id as passenger_id, p.user_id, p.first_name, p.last_name,
+                        p.date_of_birth, p.passport_number, p.nationality, p.phone, p.address,
+                        p.created_at as passenger_created_at, p.updated_at as passenger_updated_at,
+                        u.id as user_id, u.email, u.password_hash, u.role,
+                        u.created_at as user_created_at, u.updated_at as user_updated_at,
+                        s.id as seat_id, s.flight_id as seat_flight_id, s.seat_number,
+                        s.seat_class as seat_class_value, s.is_available, s.is_window, s.is_aisle,
+                        f.id as flight_id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                        f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                        f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                        f.status as flight_status, f.created_at as flight_created_at, f.updated_at as flight_updated_at
+                    FROM bookings b
+                    INNER JOIN passengers p ON b.passenger_id = p.id
+                    INNER JOIN users u ON p.user_id = u.id
+                    LEFT JOIN seats s ON b.seat_id = s.id
+                    INNER JOIN flights f ON b.flight_id = f.id
+                    WHERE b.id = %s
+                """, (booking_id,))
 
-            if booking.status != BookingStatus.PENDING:
-                raise ValueError(f"Booking {booking.booking_reference} is not pending payment")
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError(f"Booking with ID {booking_id} not found")
 
-            # Check if payment already exists
-            existing_payment = session.query(Payment).filter_by(booking_id=booking_id).first()
-            if existing_payment:
-                raise ValueError(f"Payment already exists for booking {booking.booking_reference}")
+                # Convert row to objects
+                booking = Booking(
+                    id=row['booking_id'],
+                    booking_reference=row['booking_reference'],
+                    passenger_id=row['passenger_id'],
+                    flight_id=row['flight_id'],
+                    seat_id=row['seat_id'],
+                    seat_class=SeatClass(row['seat_class']) if row['seat_class'] else None,
+                    price=row['price'],
+                    status=BookingStatus(row['status']) if row['status'] else None,
+                    booking_date=row.get('booking_date'),
+                    updated_at=row.get('booking_updated_at')
+                )
 
-            # Get passenger info for payment processing
-            passenger = booking.passenger
-            customer_info = {
-                'name': f"{passenger.first_name} {passenger.last_name}",
-                'email': passenger.user.email,
-                'passport': passenger.passport_number
-            }
+                # Attach related objects
+                booking.passenger = Passenger(
+                    id=row['passenger_id'],
+                    user_id=row['user_id'],
+                    first_name=row['first_name'],
+                    last_name=row['last_name'],
+                    date_of_birth=row['date_of_birth'],
+                    passport_number=row['passport_number'],
+                    nationality=row['nationality'],
+                    phone=row['phone'],
+                    address=row.get('address'),
+                    created_at=row.get('passenger_created_at'),
+                    updated_at=row.get('passenger_updated_at')
+                )
 
-            # Process payment through gateway
-            payment_result = self.payment_gateway.process_payment(
-                amount=booking.price,
-                payment_method=payment_method,
-                customer_info=customer_info
-            )
+                booking.passenger.user = User(
+                    id=row['user_id'],
+                    email=row['email'],
+                    password_hash=row['password_hash'],
+                    role=row['role'],
+                    created_at=row.get('user_created_at'),
+                    updated_at=row.get('user_updated_at')
+                )
 
-            # Create payment record
-            payment = Payment(
-                booking_id=booking_id,
-                transaction_id=payment_result['transaction_id'],
-                amount=booking.price,
-                payment_method=payment_method,
-                status=PaymentStatus.SUCCESS if payment_result['success'] else PaymentStatus.FAILED
-            )
-            session.add(payment)
+                if row['seat_id']:
+                    booking.seat = Seat(
+                        id=row['seat_id'],
+                        flight_id=row['seat_flight_id'],
+                        seat_number=row['seat_number'],
+                        seat_class=SeatClass(row['seat_class_value']) if row['seat_class_value'] else None,
+                        is_available=row['is_available'],
+                        is_window=row.get('is_window', False),
+                        is_aisle=row.get('is_aisle', False)
+                    )
 
-            # Confirm or cancel booking based on payment result
-            if payment_result['success']:
-                # Payment successful - confirm booking and award points
-                booking.status = BookingStatus.CONFIRMED
+                booking.flight = Flight(
+                    id=row['flight_id'],
+                    flight_number=row['flight_number'],
+                    aircraft_id=row['aircraft_id'],
+                    origin=row['origin'],
+                    destination=row['destination'],
+                    departure_time=row['departure_time'],
+                    arrival_time=row['arrival_time'],
+                    base_price_economy=row['base_price_economy'],
+                    base_price_business=row['base_price_business'],
+                    base_price_first=row['base_price_first'],
+                    available_economy=row['available_economy'],
+                    available_business=row['available_business'],
+                    available_first=row['available_first'],
+                    status=row['flight_status'],
+                    created_at=row.get('flight_created_at'),
+                    updated_at=row.get('flight_updated_at')
+                )
 
-                # Award loyalty points
-                if passenger.loyalty_account:
-                    loyalty = passenger.loyalty_account
+                if booking.status != BookingStatus.PENDING:
+                    raise ValueError(f"Booking {booking.booking_reference} is not pending payment")
 
-                    # Calculate points
-                    tier_multipliers = {
-                        'bronze': 1.0,
-                        'silver': 1.25,
-                        'gold': 1.5,
-                        'platinum': 2.0
-                    }
-                    multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
+                # Check if payment already exists
+                cursor.execute("""
+                    SELECT id FROM payments WHERE booking_id = %s
+                """, (booking_id,))
 
-                    # Base points from price
-                    base_points = int(booking.price)
+                existing_payment = cursor.fetchone()
+                if existing_payment:
+                    raise ValueError(f"Payment already exists for booking {booking.booking_reference}")
 
-                    # Class multiplier
-                    if booking.seat_class.value == 'first':
-                        base_points = int(base_points * 3.0)
-                    elif booking.seat_class.value == 'business':
-                        base_points = int(base_points * 2.0)
+                # Get passenger info for payment processing
+                passenger = booking.passenger
+                customer_info = {
+                    'name': f"{passenger.first_name} {passenger.last_name}",
+                    'email': passenger.user.email,
+                    'passport': passenger.passport_number
+                }
 
-                    # Apply tier multiplier
-                    points = int(base_points * multiplier)
+                # Process payment through gateway
+                payment_result = self.payment_gateway.process_payment(
+                    amount=booking.price,
+                    payment_method=payment_method,
+                    customer_info=customer_info
+                )
 
-                    loyalty.points += points
-                    loyalty.last_flight_date = datetime.now()
-                    loyalty.update_tier()
+                # Create payment record
+                payment_status = PaymentStatus.SUCCESS if payment_result['success'] else PaymentStatus.FAILED
+                cursor.execute("""
+                    INSERT INTO payments (booking_id, transaction_id, amount, payment_method, status, payment_date)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    RETURNING id, booking_id, transaction_id, amount, payment_method, status, payment_date, updated_at
+                """, (booking_id, payment_result['transaction_id'], booking.price, payment_method, payment_status.value))
 
-                session.flush()
-                session.refresh(payment)
-                session.refresh(booking)
+                payment_row = cursor.fetchone()
+                payment = row_to_payment(payment_row)
 
-                # Access IDs to ensure they're loaded
-                payment_id = payment.id
-                booking_id = booking.id
+                # Confirm or cancel booking based on payment result
+                if payment_result['success']:
+                    # Payment successful - confirm booking
+                    cursor.execute("""
+                        UPDATE bookings
+                        SET status = %s, updated_at = NOW()
+                        WHERE id = %s
+                    """, (BookingStatus.CONFIRMED.value, booking_id))
 
-                # Expunge objects to make them usable outside session
-                session.expunge(payment)
-                session.expunge(booking)
+                    booking.status = BookingStatus.CONFIRMED
 
-                return payment, booking
+                    # Get loyalty account if exists
+                    cursor.execute("""
+                        SELECT id, passenger_id, membership_number, points, tier,
+                               join_date, last_flight_date, updated_at
+                        FROM frequent_flyers
+                        WHERE passenger_id = %s
+                    """, (passenger.id,))
 
-            # Payment failed - cancel booking and release seat
-            booking.status = BookingStatus.CANCELLED
+                    loyalty_row = cursor.fetchone()
 
-            # Release seat
-            if booking.seat:
-                booking.seat.is_available = True
+                    # Award loyalty points
+                    if loyalty_row:
+                        loyalty = row_to_frequent_flyer(loyalty_row)
 
-            BookingService._adjust_availability(session, booking.flight_id, booking.seat_class, +1)
+                        # Calculate points
+                        tier_multipliers = {
+                            'bronze': 1.0,
+                            'silver': 1.25,
+                            'gold': 1.5,
+                            'platinum': 2.0
+                        }
+                        multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
 
-            session.flush()
+                        # Base points from price
+                        base_points = int(booking.price)
 
-            error_msg = payment_result.get('error_message', 'Payment processing failed')
-            error_code = payment_result.get('error_code', 'UNKNOWN_ERROR')
-            failure_error = ValueError(f"Payment failed: {error_msg} (Code: {error_code})")
+                        # Class multiplier
+                        if booking.seat_class.value == 'first':
+                            base_points = int(base_points * 3.0)
+                        elif booking.seat_class.value == 'business':
+                            base_points = int(base_points * 2.0)
+
+                        # Apply tier multiplier
+                        points = int(base_points * multiplier)
+
+                        # Update loyalty account
+                        new_points = loyalty.points + points
+                        loyalty.points = new_points
+                        loyalty.last_flight_date = datetime.now()
+                        loyalty.update_tier()
+
+                        cursor.execute("""
+                            UPDATE frequent_flyers
+                            SET points = %s, tier = %s, last_flight_date = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (loyalty.points, loyalty.tier.value, loyalty.last_flight_date, loyalty.id))
+
+                    return payment, booking
+
+                # Payment failed - cancel booking and release seat
+                cursor.execute("""
+                    UPDATE bookings
+                    SET status = %s, updated_at = NOW()
+                    WHERE id = %s
+                """, (BookingStatus.CANCELLED.value, booking_id))
+
+                booking.status = BookingStatus.CANCELLED
+
+                # Release seat
+                if booking.seat:
+                    cursor.execute("""
+                        UPDATE seats
+                        SET is_available = TRUE
+                        WHERE id = %s
+                    """, (booking.seat.id,))
+
+                BookingService._adjust_availability(conn, booking.flight_id, booking.seat_class, +1)
+
+                error_msg = payment_result.get('error_message', 'Payment processing failed')
+                error_code = payment_result.get('error_code', 'UNKNOWN_ERROR')
+                failure_error = ValueError(f"Payment failed: {error_msg} (Code: {error_code})")
 
         if failure_error:
             raise failure_error
@@ -250,102 +368,156 @@ class PaymentService:
         """
         db_manager = get_db_manager()
 
-        with db_manager.serializable_session() as session:
-            payment = session.query(Payment).filter_by(id=payment_id).first()
-            if not payment:
-                raise ValueError(f"Payment with ID {payment_id} not found")
+        with db_manager.serializable_transaction() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Get payment
+                cursor.execute("""
+                    SELECT id, booking_id, transaction_id, amount, payment_method,
+                           status, payment_date, updated_at
+                    FROM payments
+                    WHERE id = %s
+                """, (payment_id,))
 
-            if payment.status != PaymentStatus.SUCCESS:
-                raise ValueError(f"Cannot refund payment with status {payment.status.value}")
+                payment_row = cursor.fetchone()
+                if not payment_row:
+                    raise ValueError(f"Payment with ID {payment_id} not found")
 
-            # Process refund through gateway
-            refund_result = self.payment_gateway.refund_payment(
-                transaction_id=payment.transaction_id,
-                amount=payment.amount
-            )
+                payment = row_to_payment(payment_row)
 
-            if refund_result['success']:
-                # Update payment status
-                payment.status = PaymentStatus.REFUNDED
+                if payment.status != PaymentStatus.SUCCESS:
+                    raise ValueError(f"Cannot refund payment with status {payment.status.value}")
 
-                # Cancel booking
-                booking = payment.booking
-                if booking.status == BookingStatus.CONFIRMED:
-                    booking.status = BookingStatus.CANCELLED
+                # Process refund through gateway
+                refund_result = self.payment_gateway.refund_payment(
+                    transaction_id=payment.transaction_id,
+                    amount=payment.amount
+                )
 
-                    # Release seat
-                    if booking.seat:
-                        booking.seat.is_available = True
+                if refund_result['success']:
+                    # Update payment status
+                    cursor.execute("""
+                        UPDATE payments
+                        SET status = %s, updated_at = NOW()
+                        WHERE id = %s
+                        RETURNING id, booking_id, transaction_id, amount, payment_method,
+                                  status, payment_date, updated_at
+                    """, (PaymentStatus.REFUNDED.value, payment_id))
 
-                    BookingService._adjust_availability(session, booking.flight_id, booking.seat_class, +1)
+                    payment_row = cursor.fetchone()
+                    payment = row_to_payment(payment_row)
 
-                    # Refund loyalty points
-                    passenger = booking.passenger
-                    if passenger.loyalty_account:
-                        loyalty = passenger.loyalty_account
+                    # Get booking
+                    cursor.execute("""
+                        SELECT id, booking_reference, passenger_id, flight_id, seat_id,
+                               seat_class, price, status, booking_date, updated_at
+                        FROM bookings
+                        WHERE id = %s
+                    """, (payment.booking_id,))
 
-                        # Calculate points to refund
-                        tier_multipliers = {
-                            'bronze': 1.0,
-                            'silver': 1.25,
-                            'gold': 1.5,
-                            'platinum': 2.0
-                        }
-                        multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
+                    booking_row = cursor.fetchone()
+                    booking = row_to_booking(booking_row)
 
-                        base_points = int(booking.price)
-                        if booking.seat_class.value == 'first':
-                            base_points = int(base_points * 3.0)
-                        elif booking.seat_class.value == 'business':
-                            base_points = int(base_points * 2.0)
+                    # Cancel booking if confirmed
+                    if booking.status == BookingStatus.CONFIRMED:
+                        cursor.execute("""
+                            UPDATE bookings
+                            SET status = %s, updated_at = NOW()
+                            WHERE id = %s
+                        """, (BookingStatus.CANCELLED.value, booking.id))
 
-                        points = int(base_points * multiplier)
+                        # Release seat
+                        if booking.seat_id:
+                            cursor.execute("""
+                                UPDATE seats
+                                SET is_available = TRUE
+                                WHERE id = %s
+                            """, (booking.seat_id,))
 
-                        loyalty.points = max(0, loyalty.points - points)
-                        loyalty.update_tier()
+                        BookingService._adjust_availability(conn, booking.flight_id, booking.seat_class, +1)
 
-                session.flush()
-                session.refresh(payment)
+                        # Get loyalty account and refund points
+                        cursor.execute("""
+                            SELECT ff.id, ff.passenger_id, ff.membership_number, ff.points,
+                                   ff.tier, ff.join_date, ff.last_flight_date, ff.updated_at
+                            FROM frequent_flyers ff
+                            WHERE ff.passenger_id = %s
+                        """, (booking.passenger_id,))
 
-                # Access ID to ensure it's loaded
-                payment_id = payment.id
+                        loyalty_row = cursor.fetchone()
 
-                # Expunge object to make it usable outside session
-                session.expunge(payment)
+                        if loyalty_row:
+                            loyalty = row_to_frequent_flyer(loyalty_row)
 
-                return payment
-            else:
-                raise ValueError("Refund processing failed")
+                            # Calculate points to refund
+                            tier_multipliers = {
+                                'bronze': 1.0,
+                                'silver': 1.25,
+                                'gold': 1.5,
+                                'platinum': 2.0
+                            }
+                            multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
+
+                            base_points = int(booking.price)
+                            if booking.seat_class.value == 'first':
+                                base_points = int(base_points * 3.0)
+                            elif booking.seat_class.value == 'business':
+                                base_points = int(base_points * 2.0)
+
+                            points = int(base_points * multiplier)
+
+                            # Deduct points
+                            new_points = max(0, loyalty.points - points)
+                            loyalty.points = new_points
+                            loyalty.update_tier()
+
+                            cursor.execute("""
+                                UPDATE frequent_flyers
+                                SET points = %s, tier = %s, updated_at = NOW()
+                                WHERE id = %s
+                            """, (loyalty.points, loyalty.tier.value, loyalty.id))
+
+                    return payment
+                else:
+                    raise ValueError("Refund processing failed")
 
     def get_payment(self, payment_id: int):
         """Get payment by ID"""
         db_manager = get_db_manager()
-        with db_manager.session_scope() as session:
-            payment = session.query(Payment).filter_by(id=payment_id).first()
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, booking_id, transaction_id, amount, payment_method,
+                       status, payment_date, updated_at
+                FROM payments
+                WHERE id = %s
+            """, (payment_id,))
 
-            if payment:
-                session.expunge(payment)
-
-            return payment
+            payment_row = cursor.fetchone()
+            return row_to_payment(payment_row) if payment_row else None
 
     def get_payment_by_booking(self, booking_id: int):
         """Get payment by booking ID"""
         db_manager = get_db_manager()
-        with db_manager.session_scope() as session:
-            payment = session.query(Payment).filter_by(booking_id=booking_id).first()
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, booking_id, transaction_id, amount, payment_method,
+                       status, payment_date, updated_at
+                FROM payments
+                WHERE booking_id = %s
+            """, (booking_id,))
 
-            if payment:
-                session.expunge(payment)
-
-            return payment
+            payment_row = cursor.fetchone()
+            return row_to_payment(payment_row) if payment_row else None
 
     def get_payment_by_transaction(self, transaction_id: str):
         """Get payment by transaction ID"""
         db_manager = get_db_manager()
-        with db_manager.session_scope() as session:
-            payment = session.query(Payment).filter_by(transaction_id=transaction_id).first()
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, booking_id, transaction_id, amount, payment_method,
+                       status, payment_date, updated_at
+                FROM payments
+                WHERE transaction_id = %s
+            """, (transaction_id,))
 
-            if payment:
-                session.expunge(payment)
-
-            return payment
+            payment_row = cursor.fetchone()
+            return row_to_payment(payment_row) if payment_row else None

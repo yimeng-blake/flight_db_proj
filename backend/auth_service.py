@@ -3,8 +3,8 @@ Authentication and authorization service
 Implements password hashing and user management
 """
 import bcrypt
-from database import User, UserRole, get_session
-from sqlalchemy.exc import IntegrityError
+import psycopg2
+from database import User, UserRole, row_to_user, get_db_manager
 
 
 class AuthService:
@@ -54,32 +54,26 @@ class AuthService:
         Raises:
             ValueError: If user already exists
         """
-        session = get_session()
+        db_manager = get_db_manager()
+
         try:
-            # Check if user already exists
-            existing_user = session.query(User).filter_by(email=email).first()
-            if existing_user:
-                raise ValueError(f"User with email {email} already exists")
+            with db_manager.get_cursor() as cursor:
+                # Check if user already exists
+                cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+                if cursor.fetchone():
+                    raise ValueError(f"User with email {email} already exists")
 
-            # Create new user
-            user = User(
-                email=email,
-                password_hash=AuthService.hash_password(password),
-                role=role
-            )
-            session.add(user)
-            session.commit()
-            session.refresh(user)
+                # Create new user
+                cursor.execute("""
+                    INSERT INTO users (email, password_hash, role)
+                    VALUES (%s, %s, %s)
+                    RETURNING id, email, password_hash, role, created_at, updated_at
+                """, (email, AuthService.hash_password(password), role.value))
 
-            # Expunge to make object usable after session closes
-            session.expunge(user)
-
-            return user
-        except IntegrityError:
-            session.rollback()
+                row = cursor.fetchone()
+                return row_to_user(row)
+        except psycopg2.IntegrityError:
             raise ValueError(f"User with email {email} already exists")
-        finally:
-            session.close()
 
     @staticmethod
     def authenticate(email: str, password: str):
@@ -93,43 +87,52 @@ class AuthService:
         Returns:
             User object if authentication successful, None otherwise
         """
-        session = get_session()
-        try:
-            user = session.query(User).filter_by(email=email).first()
-            if user and AuthService.verify_password(password, user.password_hash):
-                session.expunge(user)
-                return user
+        db_manager = get_db_manager()
+
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, email, password_hash, role, created_at, updated_at
+                FROM users
+                WHERE email = %s
+            """, (email,))
+
+            row = cursor.fetchone()
+            if row:
+                user = row_to_user(row)
+                if AuthService.verify_password(password, user.password_hash):
+                    return user
+
             return None
-        finally:
-            session.close()
 
     @staticmethod
     def get_user_by_id(user_id: int):
         """Get user by ID"""
-        session = get_session()
-        try:
-            user = session.query(User).filter_by(id=user_id).first()
+        db_manager = get_db_manager()
 
-            if user:
-                session.expunge(user)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, email, password_hash, role, created_at, updated_at
+                FROM users
+                WHERE id = %s
+            """, (user_id,))
 
-            return user
-        finally:
-            session.close()
+            row = cursor.fetchone()
+            return row_to_user(row)
 
     @staticmethod
     def get_user_by_email(email: str):
         """Get user by email"""
-        session = get_session()
-        try:
-            user = session.query(User).filter_by(email=email).first()
+        db_manager = get_db_manager()
 
-            if user:
-                session.expunge(user)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, email, password_hash, role, created_at, updated_at
+                FROM users
+                WHERE email = %s
+            """, (email,))
 
-            return user
-        finally:
-            session.close()
+            row = cursor.fetchone()
+            return row_to_user(row)
 
     @staticmethod
     def is_admin(user_id: int) -> bool:

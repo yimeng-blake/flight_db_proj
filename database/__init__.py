@@ -1,12 +1,16 @@
 """Database package initialization"""
 from .models import (
-    Base, User, Passenger, Aircraft, Flight, Seat, Booking, Payment, FrequentFlyer,
-    UserRole, BookingStatus, PaymentStatus, SeatClass, LoyaltyTier
+    User, Passenger, Aircraft, Flight, Seat, Booking, Payment, FrequentFlyer,
+    UserRole, BookingStatus, PaymentStatus, SeatClass, LoyaltyTier,
+    row_to_user, row_to_passenger, row_to_aircraft, row_to_flight,
+    row_to_seat, row_to_booking, row_to_payment, row_to_frequent_flyer
 )
-from .database import DatabaseManager, get_session, set_db_manager
+from .database import DatabaseManager, get_db_manager, set_db_manager
 
 __all__ = [
-    'Base', 'User', 'Passenger', 'Aircraft', 'Flight', 'Seat', 'Booking', 'Payment', 'FrequentFlyer',
+    'User', 'Passenger', 'Aircraft', 'Flight', 'Seat', 'Booking', 'Payment', 'FrequentFlyer',
     'UserRole', 'BookingStatus', 'PaymentStatus', 'SeatClass', 'LoyaltyTier',
-    'DatabaseManager', 'get_session', 'set_db_manager'
+    'row_to_user', 'row_to_passenger', 'row_to_aircraft', 'row_to_flight',
+    'row_to_seat', 'row_to_booking', 'row_to_payment', 'row_to_frequent_flyer',
+    'DatabaseManager', 'get_db_manager', 'set_db_manager'
 ]
