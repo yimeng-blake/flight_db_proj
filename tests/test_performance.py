@@ -36,11 +36,12 @@ def large_dataset(request):
     print("\nGenerating large dataset for performance testing...")
     print("This may take several minutes but should complete within a few minutes now.")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="perf_db_"))
-    perf_db_path = temp_dir / "performance.sqlite"
+    # Use PostgreSQL for performance testing (SQLite not supported)
+    # Use environment variable or create a separate performance test database
+    perf_db_url = os.getenv('PERFORMANCE_DATABASE_URL', 'postgresql://localhost/airline_reservation_perf')
 
     previous_manager = db_module._db_manager
-    db_manager = DatabaseManager(database_url=f"sqlite:///{perf_db_path}", echo=False)
+    db_manager = DatabaseManager(database_url=perf_db_url, echo=False)
     set_db_manager(db_manager)
     db_manager.drop_tables()
     db_manager.create_tables()
@@ -62,11 +63,18 @@ def large_dataset(request):
         flight_count=flight_count,
         payment_processing_delay=0.0,
     )
+    
+    # Use raw SQL to count records (no longer using SQLAlchemy)
+    # get_cursor() returns RealDictCursor by default, so results are dicts
+    with db_manager.get_cursor() as cursor:
+        cursor.execute("SELECT COUNT(*) as count FROM passengers")
+        passenger_count_db = cursor.fetchone()['count']
 
-    with db_manager.session_scope() as session:
-        passenger_count_db = session.query(Passenger).count()
-        flight_count_db = session.query(Flight).count()
-        booking_count_db = session.query(Booking).count()
+        cursor.execute("SELECT COUNT(*) as count FROM flights")
+        flight_count_db = cursor.fetchone()['count']
+
+        cursor.execute("SELECT COUNT(*) as count FROM bookings")
+        booking_count_db = cursor.fetchone()['count']
 
     print("\nDataset generated:")
     print(f"  Passengers (objects/db): {len(data['passengers'])}/{passenger_count_db}")
@@ -88,9 +96,8 @@ def large_dataset(request):
     finally:
         print("\nCleaning up test database...")
         db_manager.drop_tables()
-        db_manager.engine.dispose()
+        db_manager.close_all_connections()
         set_db_manager(previous_manager)
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestQueryPerformance:
