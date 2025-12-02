@@ -112,6 +112,10 @@ class CustomerWindow(QMainWindow):
         self.passenger_id = passenger_id
         self.passenger = PassengerService.get_passenger(passenger_id)
 
+        # Check if passenger exists
+        if self.passenger is None:
+            raise ValueError(f"Passenger with ID {passenger_id} not found")
+
         self.setWindowTitle("Airline Reservation System - Customer")
         self.setGeometry(100, 100, 1200, 700)
 

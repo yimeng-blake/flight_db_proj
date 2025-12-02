@@ -47,24 +47,24 @@ class TestPaymentFailures:
             payment_service.process_booking_payment(booking.id)
 
         # Verify seat is released
-        from database import Seat, get_session
-        session = get_session()
-        try:
-            seat = session.query(Seat).filter(
-                Seat.flight_id == test_flight.id,
-                Seat.seat_number == seat_number
-            ).first()
-            assert seat.is_available == True
+        from database import get_db_manager
+        db = get_db_manager()
 
-            # Verify flight availability restored
-            flight = FlightService.get_flight(test_flight.id)
-            assert flight.available_economy == initial_available
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT is_available FROM seats
+                WHERE flight_id = %s AND seat_number = %s
+            """, (test_flight.id, seat_number))
+            row = cursor.fetchone()
+            assert row['is_available'] == True
 
-            # Verify booking cancelled
-            updated_booking = BookingService.get_booking(booking.id)
-            assert updated_booking.status == BookingStatus.CANCELLED
-        finally:
-            session.close()
+        # Verify flight availability restored
+        flight = FlightService.get_flight(test_flight.id)
+        assert flight.available_economy == initial_available
+
+        # Verify booking cancelled
+        updated_booking = BookingService.get_booking(booking.id)
+        assert updated_booking.status == BookingStatus.CANCELLED
 
     def test_payment_success_confirms_booking(self, db_manager, test_passenger, test_flight):
         """Test successful payment confirms booking"""
@@ -111,20 +111,20 @@ class TestPaymentFailures:
         updated_booking = BookingService.get_booking(booking.id)
         assert updated_booking.status == BookingStatus.CANCELLED
 
-        from database import Seat, get_session
-        session = get_session()
-        try:
-            seat = session.query(Seat).filter(
-                Seat.flight_id == test_flight.id,
-                Seat.seat_number == seat_number
-            ).first()
-            assert seat.is_available == True
+        from database import get_db_manager
+        db = get_db_manager()
 
-            # Verify availability increased
-            flight = FlightService.get_flight(test_flight.id)
-            assert flight.available_economy == initial_available + 1
-        finally:
-            session.close()
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT is_available FROM seats
+                WHERE flight_id = %s AND seat_number = %s
+            """, (test_flight.id, seat_number))
+            row = cursor.fetchone()
+            assert row['is_available'] == True
+
+        # Verify availability increased
+        flight = FlightService.get_flight(test_flight.id)
+        assert flight.available_economy == initial_available + 1
 
 
 class TestOverbookingPrevention:
@@ -426,26 +426,41 @@ class TestLoyaltyProgram:
         initial_tier = loyalty.tier
 
         # Manually add points to trigger tier upgrade
-        from database import get_session
-        session = get_session()
-        try:
-            loyalty = session.query(type(loyalty)).filter_by(id=loyalty.id).first()
-            loyalty.points = 30000  # Should be Silver
-            loyalty.update_tier()
-            session.commit()
-            assert loyalty.tier == LoyaltyTier.SILVER
+        from database import get_db_manager
+        db = get_db_manager()
 
-            loyalty.points = 60000  # Should be Gold
-            loyalty.update_tier()
-            session.commit()
-            assert loyalty.tier == LoyaltyTier.GOLD
+        # Test Silver tier
+        loyalty.points = 30000
+        loyalty.update_tier()
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE frequent_flyers
+                SET points = %s, tier = %s
+                WHERE id = %s
+            """, (loyalty.points, loyalty.tier.value, loyalty.id))
+        assert loyalty.tier == LoyaltyTier.SILVER
 
-            loyalty.points = 110000  # Should be Platinum
-            loyalty.update_tier()
-            session.commit()
-            assert loyalty.tier == LoyaltyTier.PLATINUM
-        finally:
-            session.close()
+        # Test Gold tier
+        loyalty.points = 60000
+        loyalty.update_tier()
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE frequent_flyers
+                SET points = %s, tier = %s
+                WHERE id = %s
+            """, (loyalty.points, loyalty.tier.value, loyalty.id))
+        assert loyalty.tier == LoyaltyTier.GOLD
+
+        # Test Platinum tier
+        loyalty.points = 110000
+        loyalty.update_tier()
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE frequent_flyers
+                SET points = %s, tier = %s
+                WHERE id = %s
+            """, (loyalty.points, loyalty.tier.value, loyalty.id))
+        assert loyalty.tier == LoyaltyTier.PLATINUM
 
     def test_points_calculation_by_class(self, db_manager, test_passenger, test_flight):
         """Test different point multipliers for seat classes"""
@@ -473,20 +488,31 @@ class TestLoyaltyProgram:
 
     def test_negative_points_prevented(self, db_manager, test_passenger):
         """Test points cannot go negative"""
-        from database import get_session
-        session = get_session()
-        try:
-            loyalty = session.query(type(test_passenger.loyalty_account)).filter_by(
-                passenger_id=test_passenger.id
-            ).first()
+        from database import get_db_manager
+        db = get_db_manager()
 
-            loyalty.points = 100
-            session.commit()
+        # Set points to 100
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE frequent_flyers
+                SET points = %s
+                WHERE passenger_id = %s
+            """, (100, test_passenger.id))
 
-            # Try to deduct more points than available
-            loyalty.points = max(0, loyalty.points - 200)
-            session.commit()
+        # Get loyalty account
+        loyalty = PassengerService.get_loyalty_account(test_passenger.id)
+        assert loyalty.points == 100
 
-            assert loyalty.points == 0  # Should be 0, not negative
-        finally:
-            session.close()
+        # Try to deduct more points than available
+        new_points = max(0, loyalty.points - 200)
+
+        with db.get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE frequent_flyers
+                SET points = %s
+                WHERE passenger_id = %s
+            """, (new_points, test_passenger.id))
+
+        # Verify points are 0, not negative
+        loyalty = PassengerService.get_loyalty_account(test_passenger.id)
+        assert loyalty.points == 0
