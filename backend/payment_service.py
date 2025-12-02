@@ -295,7 +295,7 @@ class PaymentService:
                     if loyalty_row:
                         loyalty = row_to_frequent_flyer(loyalty_row)
 
-                        # Calculate points
+                        # Calculate points using tier multiplier
                         tier_multipliers = {
                             'bronze': 1.0,
                             'silver': 1.25,
@@ -304,17 +304,8 @@ class PaymentService:
                         }
                         multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
 
-                        # Base points from price
-                        base_points = int(booking.price)
-
-                        # Class multiplier
-                        if booking.seat_class.value == 'first':
-                            base_points = int(base_points * 3.0)
-                        elif booking.seat_class.value == 'business':
-                            base_points = int(base_points * 2.0)
-
-                        # Apply tier multiplier
-                        points = int(base_points * multiplier)
+                        # Use BookingService method for consistent calculation
+                        points = BookingService._calculate_points(booking.price, booking.seat_class, multiplier)
 
                         # Update loyalty account
                         new_points = loyalty.points + points
@@ -448,7 +439,7 @@ class PaymentService:
                         if loyalty_row:
                             loyalty = row_to_frequent_flyer(loyalty_row)
 
-                            # Calculate points to refund
+                            # Calculate points to refund using tier multiplier
                             tier_multipliers = {
                                 'bronze': 1.0,
                                 'silver': 1.25,
@@ -457,13 +448,8 @@ class PaymentService:
                             }
                             multiplier = tier_multipliers.get(loyalty.tier.value, 1.0)
 
-                            base_points = int(booking.price)
-                            if booking.seat_class.value == 'first':
-                                base_points = int(base_points * 3.0)
-                            elif booking.seat_class.value == 'business':
-                                base_points = int(base_points * 2.0)
-
-                            points = int(base_points * multiplier)
+                            # Use BookingService method for consistent calculation
+                            points = BookingService._calculate_points(booking.price, booking.seat_class, multiplier)
 
                             # Deduct points
                             new_points = max(0, loyalty.points - points)

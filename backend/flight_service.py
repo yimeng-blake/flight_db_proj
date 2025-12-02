@@ -523,7 +523,7 @@ class FlightService:
         """
         db_manager = get_db_manager()
 
-        with db_manager.get_cursor() as cursor:
+        with db_manager.get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
                 SELECT
                     f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
@@ -539,6 +539,9 @@ class FlightService:
             """, (limit, offset))
 
             rows = cursor.fetchall()
+            if not rows:
+                return []
+
             flights = []
             for row in rows:
                 flight = row_to_flight(row)
@@ -568,7 +571,7 @@ class FlightService:
 
         db_manager = get_db_manager()
 
-        with db_manager.get_cursor() as cursor:
+        with db_manager.get_cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
                 SELECT
                     f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
@@ -584,6 +587,9 @@ class FlightService:
             """, (f'%{flight_number}%',))
 
             rows = cursor.fetchall()
+            if not rows:
+                return []
+
             flights = []
             for row in rows:
                 flight = row_to_flight(row)
