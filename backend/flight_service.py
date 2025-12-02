@@ -4,6 +4,7 @@ Handles CRUD operations for flights and aircraft
 """
 from datetime import datetime
 from typing import List, Optional
+from psycopg2.extras import RealDictCursor
 from database import Flight, Aircraft, Seat, SeatClass, row_to_flight, row_to_aircraft, row_to_seat, get_db_manager
 
 
@@ -178,7 +179,7 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Get aircraft
                 cursor.execute("""
                     SELECT id, model, manufacturer, total_seats, economy_seats,
@@ -416,7 +417,7 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM flights WHERE id = %s", (flight_id,))
                 if not cursor.fetchone():
                     raise ValueError(f"Flight with ID {flight_id} not found")
@@ -494,7 +495,7 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM flights WHERE id = %s", (flight_id,))
                 if not cursor.fetchone():
                     raise ValueError(f"Flight with ID {flight_id} not found")

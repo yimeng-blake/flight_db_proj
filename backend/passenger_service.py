@@ -4,6 +4,7 @@ Handles passenger profiles and frequent flyer accounts
 """
 from datetime import datetime
 from typing import Optional
+from psycopg2.extras import RealDictCursor
 from database import (
     Passenger, FrequentFlyer, User, LoyaltyTier, Booking, Flight, Seat,
     row_to_passenger, row_to_frequent_flyer, row_to_booking, row_to_flight,
@@ -47,7 +48,7 @@ class PassengerService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Check if user exists
                 cursor.execute("SELECT id FROM users WHERE id = %s", (user_id,))
                 if not cursor.fetchone():
@@ -163,7 +164,7 @@ class PassengerService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM passengers WHERE id = %s", (passenger_id,))
                 if not cursor.fetchone():
                     raise ValueError(f"Passenger with ID {passenger_id} not found")
@@ -214,7 +215,7 @@ class PassengerService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id FROM passengers WHERE id = %s", (passenger_id,))
                 if not cursor.fetchone():
                     raise ValueError(f"Passenger with ID {passenger_id} not found")
@@ -375,7 +376,7 @@ class PassengerService:
         db_manager = get_db_manager()
 
         with db_manager.transaction() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Check if passenger exists
                 cursor.execute("SELECT id FROM passengers WHERE id = %s", (passenger_id,))
                 if not cursor.fetchone():
