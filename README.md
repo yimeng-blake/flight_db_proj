@@ -1,6 +1,6 @@
 # Airline Reservation System
 
-A comprehensive airline reservation system built with Python, SQLAlchemy, and PyQt6. Features robust transaction handling, concurrent booking support, and a complete frequent flyer program.
+A comprehensive airline reservation system built with Python, PostgreSQL, and PyQt6. Features robust transaction handling, concurrent booking support, and a complete frequent flyer program.
 
 ## Features
 
@@ -16,7 +16,7 @@ A comprehensive airline reservation system built with Python, SQLAlchemy, and Py
 - **Concurrent Booking**: Handles simultaneous seat reservations without double-booking
 - **Transaction Rollback**: Automatic rollback on payment failures
 - **Referential Integrity**: Proper cascading deletes and foreign key constraints
-- **Security**: Password hashing (bcrypt), SQL injection prevention (SQLAlchemy ORM)
+- **Security**: SQL injection prevention via parameterized queries (psycopg2)
 - **Performance**: Indexed queries, optimized for large datasets (1M+ bookings)
 
 ## Project Structure
@@ -30,8 +30,9 @@ flight/
 │   ├── booking_service.py   # Booking with concurrency control
 │   └── payment_service.py   # Payment processing and rollback
 ├── database/                 # Data layer
-│   ├── models.py            # SQLAlchemy models
-│   └── database.py          # Connection and transaction management
+│   ├── models.py            # Data models (Python dataclasses)
+│   ├── database.py          # Connection and transaction management
+│   └── schema.sql           # PostgreSQL schema definition
 ├── frontend/                 # User interfaces
 │   ├── admin_window.py      # Administrator interface
 │   └── customer_window.py   # Customer booking interface
@@ -49,7 +50,7 @@ flight/
 
 ### Prerequisites
 - Python 3.8 or higher
-- PostgreSQL 12+ (recommended) or SQLite for development
+- PostgreSQL 12+
 
 ### Setup Steps
 
@@ -75,7 +76,6 @@ flight/
 
 4. **Configure database**
 
-   For PostgreSQL:
    ```bash
    # Create database
    createdb airline_reservation
@@ -86,15 +86,10 @@ flight/
    # DATABASE_URL=postgresql://username:password@localhost:5432/airline_reservation
    ```
 
-   For SQLite (development):
-   ```bash
-   # No additional setup needed
-   # SQLite database will be created automatically
-   ```
-
 5. **Initialize database**
    ```bash
-   python database/database.py
+   # Run schema to create all tables
+   psql -d airline_reservation -f database/schema.sql
    ```
 
 ## Usage
@@ -223,9 +218,11 @@ Aircraft (1) ←→ (many) Flight
 The system uses SERIALIZABLE isolation level for critical operations:
 
 ```python
-with db_manager.serializable_session() as session:
-    # All operations in this block are serializable
-    # Prevents race conditions and ensures ACID compliance
+with db_manager.serializable_transaction() as conn:
+    with conn.cursor() as cursor:
+        # All operations in this block are serializable
+        # Prevents race conditions and ensures ACID compliance
+        cursor.execute("UPDATE seats SET is_available = FALSE WHERE id = %s", (seat_id,))
 ```
 
 ### Payment with Rollback
@@ -272,15 +269,10 @@ Multiple users booking the same seat simultaneously could cause:
 
 ## Security Features
 
-### Password Security
-- Passwords hashed using bcrypt
-- Automatic salt generation
-- One-way encryption (passwords never stored in plain text)
-
 ### SQL Injection Prevention
-- SQLAlchemy ORM with parameterized queries
+- Parameterized queries with psycopg2 (%s placeholders)
 - No raw SQL string concatenation
-- Automatic input escaping
+- Automatic input escaping by database driver
 
 ### Input Validation
 - Database constraints (CHECK, UNIQUE, FOREIGN KEY)
@@ -296,15 +288,15 @@ Multiple users booking the same seat simultaneously could cause:
 - Query execution time < 100ms for indexed lookups
 
 ### Connection Pooling
-- Pool size: 20 connections
-- Max overflow: 40 connections
-- Connection pre-ping for reliability
-- Automatic connection recycling
+- ThreadedConnectionPool from psycopg2
+- Pool size: 5-60 connections
+- Automatic connection management
+- Thread-safe operations
 
 ### Query Optimization
-- Pagination for large result sets
-- Eager loading for relationships
-- Selective field loading
+- Indexed queries for fast lookups
+- RealDictCursor for efficient row mapping
+- Batch operations with execute_values()
 - Efficient JOIN strategies
 
 ## Testing Strategy
@@ -418,29 +410,4 @@ Total Points = Base Points × Class Multiplier × Tier Multiplier
 - Tier: Gold (1.5x)
 - Points Earned: 500 × 1 × 1.5 = 750 points
 
-## Troubleshooting
 
-### Database Connection Issues
-
-**Problem:** Cannot connect to database
-
-**Solution:**
-```bash
-# Check PostgreSQL is running
-sudo systemctl status postgresql
-
-# Verify connection string in .env
-DATABASE_URL=postgresql://user:pass@localhost:5432/airline_reservation
-
-# Test connection
-psql -U user -d airline_reservation
-```
-
-### PyQt6 Import Errors
-
-**Problem:** `ImportError: No module named 'PyQt6'`
-
-**Solution:**
-```bash
-pip install PyQt6
-```
