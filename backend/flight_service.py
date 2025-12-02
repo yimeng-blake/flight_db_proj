@@ -4,10 +4,7 @@ Handles CRUD operations for flights and aircraft
 """
 from datetime import datetime
 from typing import List, Optional
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import joinedload
-from database import Flight, Aircraft, Seat, SeatClass, get_session
-from database.database import get_db_manager
+from database import Flight, Aircraft, Seat, SeatClass, row_to_flight, row_to_aircraft, row_to_seat, get_db_manager
 
 
 class FlightService:
@@ -33,63 +30,58 @@ class FlightService:
         if total_seats != economy_seats + business_seats + first_class_seats:
             raise ValueError("Total seats must equal sum of class seats")
 
-        session = get_session()
-        try:
-            aircraft = Aircraft(
-                model=model,
-                manufacturer=manufacturer,
-                total_seats=total_seats,
-                economy_seats=economy_seats,
-                business_seats=business_seats,
-                first_class_seats=first_class_seats
-            )
-            session.add(aircraft)
-            session.commit()
-            session.refresh(aircraft)
+        db_manager = get_db_manager()
 
-            # Expunge to make object usable after session closes
-            session.expunge(aircraft)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO aircraft (model, manufacturer, total_seats, economy_seats,
+                                    business_seats, first_class_seats)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id, model, manufacturer, total_seats, economy_seats,
+                         business_seats, first_class_seats
+            """, (model, manufacturer, total_seats, economy_seats, business_seats, first_class_seats))
 
-            return aircraft
-        finally:
-            session.close()
+            row = cursor.fetchone()
+            return row_to_aircraft(row)
 
     @staticmethod
     def get_aircraft(aircraft_id: int):
         """Get aircraft by ID"""
-        session = get_session()
-        try:
-            aircraft = session.query(Aircraft).filter_by(id=aircraft_id).first()
+        db_manager = get_db_manager()
 
-            if aircraft:
-                session.expunge(aircraft)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, model, manufacturer, total_seats, economy_seats,
+                       business_seats, first_class_seats
+                FROM aircraft
+                WHERE id = %s
+            """, (aircraft_id,))
 
-            return aircraft
-        finally:
-            session.close()
+            row = cursor.fetchone()
+            return row_to_aircraft(row)
 
     @staticmethod
     def list_aircraft():
         """List all aircraft"""
-        session = get_session()
-        try:
-            aircraft_list = session.query(Aircraft).all()
+        db_manager = get_db_manager()
 
-            # Expunge all aircraft to make them usable after session closes
-            for aircraft in aircraft_list:
-                session.expunge(aircraft)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT id, model, manufacturer, total_seats, economy_seats,
+                       business_seats, first_class_seats
+                FROM aircraft
+            """)
 
-            return aircraft_list
-        finally:
-            session.close()
+            rows = cursor.fetchall()
+            return [row_to_aircraft(row) for row in rows]
 
     @staticmethod
-    def _generate_seats(session, flight_id: int, aircraft: Aircraft):
+    def _generate_seats(cursor, flight_id: int, aircraft: Aircraft):
         """
         Generate seats for a flight based on aircraft configuration
 
         Args:
-            session: Database session
+            cursor: Database cursor
             flight_id: Flight ID
             aircraft: Aircraft object
         """
@@ -101,51 +93,66 @@ class FlightService:
             for col in ['A', 'B', 'C', 'D']:
                 if len(seats) >= aircraft.first_class_seats:
                     break
-                seat = Seat(
-                    flight_id=flight_id,
-                    seat_number=f"{row}{col}",
-                    seat_class=SeatClass.FIRST,
-                    is_available=True,
-                    is_window=(col in ['A', 'D']),
-                    is_aisle=(col in ['B', 'C'])
-                )
+                seat = {
+                    'flight_id': flight_id,
+                    'seat_number': f"{row}{col}",
+                    'seat_class': SeatClass.FIRST.value,
+                    'is_available': True,
+                    'is_window': col in ['A', 'D'],
+                    'is_aisle': col in ['B', 'C']
+                }
                 seats.append(seat)
 
         # Generate business class seats
         business_start_row = first_rows + 1
         business_rows = (aircraft.business_seats + 5) // 6
+        business_count = 0
         for row in range(business_start_row, business_start_row + business_rows):
             for col in ['A', 'B', 'C', 'D', 'E', 'F']:
-                if len([s for s in seats if s.seat_class == SeatClass.BUSINESS]) >= aircraft.business_seats:
+                if business_count >= aircraft.business_seats:
                     break
-                seat = Seat(
-                    flight_id=flight_id,
-                    seat_number=f"{row}{col}",
-                    seat_class=SeatClass.BUSINESS,
-                    is_available=True,
-                    is_window=(col in ['A', 'F']),
-                    is_aisle=(col in ['C', 'D'])
-                )
+                seat = {
+                    'flight_id': flight_id,
+                    'seat_number': f"{row}{col}",
+                    'seat_class': SeatClass.BUSINESS.value,
+                    'is_available': True,
+                    'is_window': col in ['A', 'F'],
+                    'is_aisle': col in ['C', 'D']
+                }
                 seats.append(seat)
+                business_count += 1
 
         # Generate economy class seats
         economy_start_row = business_start_row + business_rows
         economy_rows = (aircraft.economy_seats + 5) // 6
+        economy_count = 0
         for row in range(economy_start_row, economy_start_row + economy_rows):
             for col in ['A', 'B', 'C', 'D', 'E', 'F']:
-                if len([s for s in seats if s.seat_class == SeatClass.ECONOMY]) >= aircraft.economy_seats:
+                if economy_count >= aircraft.economy_seats:
                     break
-                seat = Seat(
-                    flight_id=flight_id,
-                    seat_number=f"{row}{col}",
-                    seat_class=SeatClass.ECONOMY,
-                    is_available=True,
-                    is_window=(col in ['A', 'F']),
-                    is_aisle=(col in ['C', 'D'])
-                )
+                seat = {
+                    'flight_id': flight_id,
+                    'seat_number': f"{row}{col}",
+                    'seat_class': SeatClass.ECONOMY.value,
+                    'is_available': True,
+                    'is_window': col in ['A', 'F'],
+                    'is_aisle': col in ['C', 'D']
+                }
                 seats.append(seat)
+                economy_count += 1
 
-        session.add_all(seats)
+        # Batch insert seats
+        if seats:
+            from psycopg2.extras import execute_values
+            execute_values(
+                cursor,
+                """
+                INSERT INTO seats (flight_id, seat_number, seat_class, is_available, is_window, is_aisle)
+                VALUES %s
+                """,
+                [(s['flight_id'], s['seat_number'], s['seat_class'],
+                  s['is_available'], s['is_window'], s['is_aisle']) for s in seats]
+            )
 
     @staticmethod
     def create_flight(flight_number: str, aircraft_id: int, origin: str, destination: str,
@@ -168,87 +175,143 @@ class FlightService:
         Returns:
             Created flight object
         """
-        session = get_session()
-        try:
-            # Get aircraft
-            aircraft = session.query(Aircraft).filter_by(id=aircraft_id).first()
-            if not aircraft:
-                raise ValueError(f"Aircraft with ID {aircraft_id} not found")
+        db_manager = get_db_manager()
 
-            # Check if flight number already exists
-            existing = session.query(Flight).filter_by(flight_number=flight_number).first()
-            if existing:
-                raise ValueError(f"Flight number {flight_number} already exists")
+        with db_manager.transaction() as conn:
+            with conn.cursor() as cursor:
+                # Get aircraft
+                cursor.execute("""
+                    SELECT id, model, manufacturer, total_seats, economy_seats,
+                           business_seats, first_class_seats
+                    FROM aircraft
+                    WHERE id = %s
+                """, (aircraft_id,))
 
-            # Create flight
-            flight = Flight(
-                flight_number=flight_number,
-                aircraft_id=aircraft_id,
-                origin=origin,
-                destination=destination,
-                departure_time=departure_time,
-                arrival_time=arrival_time,
-                base_price_economy=base_price_economy,
-                base_price_business=base_price_business,
-                base_price_first=base_price_first,
-                available_economy=aircraft.economy_seats,
-                available_business=aircraft.business_seats,
-                available_first=aircraft.first_class_seats
-            )
-            session.add(flight)
-            session.flush()  # Get flight ID
+                aircraft_row = cursor.fetchone()
+                if not aircraft_row:
+                    raise ValueError(f"Aircraft with ID {aircraft_id} not found")
 
-            # Generate seats
-            FlightService._generate_seats(session, flight.id, aircraft)
+                aircraft = row_to_aircraft(aircraft_row)
 
-            session.commit()
+                # Check if flight number already exists
+                cursor.execute("SELECT id FROM flights WHERE flight_number = %s", (flight_number,))
+                if cursor.fetchone():
+                    raise ValueError(f"Flight number {flight_number} already exists")
 
-            # Reload with aircraft and seats eagerly loaded so callers can
-            # inspect seat inventories outside the session context.
-            hydrated_flight = (
-                session.query(Flight)
-                .options(
-                    joinedload(Flight.aircraft),
-                    joinedload(Flight.seats)
-                )
-                .filter_by(id=flight.id)
-                .first()
-            )
+                # Create flight
+                cursor.execute("""
+                    INSERT INTO flights (flight_number, aircraft_id, origin, destination,
+                                       departure_time, arrival_time, base_price_economy,
+                                       base_price_business, base_price_first, available_economy,
+                                       available_business, available_first)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id, flight_number, aircraft_id, origin, destination, departure_time,
+                             arrival_time, base_price_economy, base_price_business, base_price_first,
+                             available_economy, available_business, available_first, status,
+                             created_at, updated_at
+                """, (flight_number, aircraft_id, origin, destination, departure_time, arrival_time,
+                     base_price_economy, base_price_business, base_price_first,
+                     aircraft.economy_seats, aircraft.business_seats, aircraft.first_class_seats))
 
-            if hydrated_flight:
-                session.expunge(hydrated_flight)
+                flight_row = cursor.fetchone()
+                flight = row_to_flight(flight_row)
 
-            return hydrated_flight
-        finally:
-            session.close()
+                # Generate seats
+                FlightService._generate_seats(cursor, flight.id, aircraft)
+
+                # Load seats
+                cursor.execute("""
+                    SELECT id, flight_id, seat_number, seat_class, is_available, is_window, is_aisle
+                    FROM seats
+                    WHERE flight_id = %s
+                    ORDER BY seat_number
+                """, (flight.id,))
+
+                seat_rows = cursor.fetchall()
+                flight.seats = [row_to_seat(row) for row in seat_rows]
+                flight.aircraft = aircraft
+
+                return flight
 
     @staticmethod
     def get_flight(flight_id: int):
         """Get flight by ID"""
-        session = get_session()
-        try:
-            flight = session.query(Flight).options(joinedload(Flight.aircraft)).filter_by(id=flight_id).first()
+        db_manager = get_db_manager()
 
-            if flight:
-                session.expunge(flight)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                    f.status, f.created_at, f.updated_at,
+                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
+                    a.business_seats, a.first_class_seats
+                FROM flights f
+                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                WHERE f.id = %s
+            """, (flight_id,))
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            flight = row_to_flight(row)
+
+            # Add aircraft data
+            if row.get('a_id'):
+                aircraft_data = {
+                    'id': row['a_id'],
+                    'model': row['model'],
+                    'manufacturer': row['manufacturer'],
+                    'total_seats': row['total_seats'],
+                    'economy_seats': row['economy_seats'],
+                    'business_seats': row['business_seats'],
+                    'first_class_seats': row['first_class_seats']
+                }
+                flight.aircraft = row_to_aircraft(aircraft_data)
 
             return flight
-        finally:
-            session.close()
 
     @staticmethod
     def get_flight_by_number(flight_number: str):
         """Get flight by flight number"""
-        session = get_session()
-        try:
-            flight = session.query(Flight).options(joinedload(Flight.aircraft)).filter_by(flight_number=flight_number).first()
+        db_manager = get_db_manager()
 
-            if flight:
-                session.expunge(flight)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                    f.status, f.created_at, f.updated_at,
+                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
+                    a.business_seats, a.first_class_seats
+                FROM flights f
+                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                WHERE f.flight_number = %s
+            """, (flight_number,))
+
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            flight = row_to_flight(row)
+
+            # Add aircraft data
+            if row.get('a_id'):
+                aircraft_data = {
+                    'id': row['a_id'],
+                    'model': row['model'],
+                    'manufacturer': row['manufacturer'],
+                    'total_seats': row['total_seats'],
+                    'economy_seats': row['economy_seats'],
+                    'business_seats': row['business_seats'],
+                    'first_class_seats': row['first_class_seats']
+                }
+                flight.aircraft = row_to_aircraft(aircraft_data)
 
             return flight
-        finally:
-            session.close()
 
     @staticmethod
     def search_flights(origin: Optional[str] = None, destination: Optional[str] = None,
@@ -267,15 +330,20 @@ class FlightService:
         Returns:
             List of matching flights
         """
-        session = get_session()
-        try:
-            query = session.query(Flight).options(joinedload(Flight.aircraft)).filter(Flight.status == 'scheduled')
+        db_manager = get_db_manager()
+
+        with db_manager.get_cursor() as cursor:
+            # Build query dynamically
+            conditions = ["f.status = 'scheduled'"]
+            params = []
 
             if origin:
-                query = query.filter(Flight.origin.ilike(f'%{origin}%'))
+                conditions.append("f.origin ILIKE %s")
+                params.append(f'%{origin}%')
 
             if destination:
-                query = query.filter(Flight.destination.ilike(f'%{destination}%'))
+                conditions.append("f.destination ILIKE %s")
+                params.append(f'%{destination}%')
 
             if departure_date or end_date:
                 # Support single-day searches as well as date ranges
@@ -288,27 +356,50 @@ class FlightService:
                 if end_of_window < start_of_window:
                     raise ValueError("End date cannot be earlier than start date")
 
-                query = query.filter(and_(
-                    Flight.departure_time >= start_of_window,
-                    Flight.departure_time <= end_of_window
-                ))
+                conditions.append("f.departure_time >= %s AND f.departure_time <= %s")
+                params.extend([start_of_window, end_of_window])
 
             # Filter by available seats
-            query = query.filter(or_(
-                Flight.available_economy >= min_seats,
-                Flight.available_business >= min_seats,
-                Flight.available_first >= min_seats
-            ))
+            conditions.append("(f.available_economy >= %s OR f.available_business >= %s OR f.available_first >= %s)")
+            params.extend([min_seats, min_seats, min_seats])
 
-            flights = query.order_by(Flight.departure_time).all()
+            where_clause = " AND ".join(conditions)
 
-            # Expunge all flights to make them usable after session closes
-            for flight in flights:
-                session.expunge(flight)
+            cursor.execute(f"""
+                SELECT
+                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                    f.status, f.created_at, f.updated_at,
+                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
+                    a.business_seats, a.first_class_seats
+                FROM flights f
+                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                WHERE {where_clause}
+                ORDER BY f.departure_time
+            """, params)
+
+            rows = cursor.fetchall()
+            flights = []
+            for row in rows:
+                flight = row_to_flight(row)
+
+                # Add aircraft data
+                if row.get('a_id'):
+                    aircraft_data = {
+                        'id': row['a_id'],
+                        'model': row['model'],
+                        'manufacturer': row['manufacturer'],
+                        'total_seats': row['total_seats'],
+                        'economy_seats': row['economy_seats'],
+                        'business_seats': row['business_seats'],
+                        'first_class_seats': row['first_class_seats']
+                    }
+                    flight.aircraft = row_to_aircraft(aircraft_data)
+
+                flights.append(flight)
 
             return flights
-        finally:
-            session.close()
 
     @staticmethod
     def update_flight(flight_id: int, **kwargs):
@@ -322,29 +413,52 @@ class FlightService:
         Returns:
             Updated flight object
         """
-        session = get_session()
-        try:
-            flight = session.query(Flight).filter_by(id=flight_id).first()
-            if not flight:
-                raise ValueError(f"Flight with ID {flight_id} not found")
+        db_manager = get_db_manager()
 
-            # Update allowed fields
-            allowed_fields = ['origin', 'destination', 'departure_time', 'arrival_time',
-                            'base_price_economy', 'base_price_business', 'base_price_first', 'status']
+        with db_manager.transaction() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id FROM flights WHERE id = %s", (flight_id,))
+                if not cursor.fetchone():
+                    raise ValueError(f"Flight with ID {flight_id} not found")
 
-            for key, value in kwargs.items():
-                if key in allowed_fields and value is not None:
-                    setattr(flight, key, value)
+                # Update allowed fields
+                allowed_fields = ['origin', 'destination', 'departure_time', 'arrival_time',
+                                'base_price_economy', 'base_price_business', 'base_price_first', 'status']
 
-            session.commit()
-            session.refresh(flight)
+                updates = []
+                values = []
+                for key, value in kwargs.items():
+                    if key in allowed_fields and value is not None:
+                        updates.append(f"{key} = %s")
+                        values.append(value)
 
-            # Expunge to make object usable after session closes
-            session.expunge(flight)
+                if updates:
+                    values.append(flight_id)
+                    cursor.execute(f"""
+                        UPDATE flights
+                        SET {', '.join(updates)}
+                        WHERE id = %s
+                        RETURNING id, flight_number, aircraft_id, origin, destination, departure_time,
+                                 arrival_time, base_price_economy, base_price_business, base_price_first,
+                                 available_economy, available_business, available_first, status,
+                                 created_at, updated_at
+                    """, values)
 
-            return flight
-        finally:
-            session.close()
+                    row = cursor.fetchone()
+                    return row_to_flight(row)
+
+                # No updates, just return the existing flight
+                cursor.execute("""
+                    SELECT id, flight_number, aircraft_id, origin, destination, departure_time,
+                           arrival_time, base_price_economy, base_price_business, base_price_first,
+                           available_economy, available_business, available_first, status,
+                           created_at, updated_at
+                    FROM flights
+                    WHERE id = %s
+                """, (flight_id,))
+
+                row = cursor.fetchone()
+                return row_to_flight(row)
 
     @staticmethod
     def cancel_flight(flight_id: int):
@@ -377,19 +491,22 @@ class FlightService:
         Raises:
             ValueError: If flight has existing bookings
         """
-        session = get_session()
-        try:
-            flight = session.query(Flight).filter_by(id=flight_id).first()
-            if not flight:
-                raise ValueError(f"Flight with ID {flight_id} not found")
+        db_manager = get_db_manager()
 
-            if len(flight.bookings) > 0:
-                raise ValueError(f"Cannot delete flight with existing bookings. Cancel the flight instead.")
+        with db_manager.transaction() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT id FROM flights WHERE id = %s", (flight_id,))
+                if not cursor.fetchone():
+                    raise ValueError(f"Flight with ID {flight_id} not found")
 
-            session.delete(flight)
-            session.commit()
-        finally:
-            session.close()
+                # Check for bookings
+                cursor.execute("SELECT COUNT(*) FROM bookings WHERE flight_id = %s", (flight_id,))
+                booking_count = cursor.fetchone()['count']
+
+                if booking_count > 0:
+                    raise ValueError(f"Cannot delete flight with existing bookings. Cancel the flight instead.")
+
+                cursor.execute("DELETE FROM flights WHERE id = %s", (flight_id,))
 
     @staticmethod
     def list_flights(limit: int = 100, offset: int = 0):
@@ -403,17 +520,44 @@ class FlightService:
         Returns:
             List of flights
         """
-        session = get_session()
-        try:
-            flights = session.query(Flight).options(joinedload(Flight.aircraft)).order_by(Flight.departure_time.desc()).limit(limit).offset(offset).all()
+        db_manager = get_db_manager()
 
-            # Expunge all flights to make them usable after session closes
-            for flight in flights:
-                session.expunge(flight)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                    f.status, f.created_at, f.updated_at,
+                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
+                    a.business_seats, a.first_class_seats
+                FROM flights f
+                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                ORDER BY f.departure_time DESC
+                LIMIT %s OFFSET %s
+            """, (limit, offset))
+
+            rows = cursor.fetchall()
+            flights = []
+            for row in rows:
+                flight = row_to_flight(row)
+
+                # Add aircraft data
+                if row.get('a_id'):
+                    aircraft_data = {
+                        'id': row['a_id'],
+                        'model': row['model'],
+                        'manufacturer': row['manufacturer'],
+                        'total_seats': row['total_seats'],
+                        'economy_seats': row['economy_seats'],
+                        'business_seats': row['business_seats'],
+                        'first_class_seats': row['first_class_seats']
+                    }
+                    flight.aircraft = row_to_aircraft(aircraft_data)
+
+                flights.append(flight)
 
             return flights
-        finally:
-            session.close()
 
     @staticmethod
     def search_flights_by_number(flight_number: str) -> List[Flight]:
@@ -421,20 +565,41 @@ class FlightService:
         if not flight_number:
             return []
 
-        session = get_session()
-        try:
-            pattern = f"%{flight_number}%"
-            flights = (
-                session.query(Flight)
-                .options(joinedload(Flight.aircraft))
-                .filter(Flight.flight_number.ilike(pattern))
-                .order_by(Flight.departure_time.desc())
-                .all()
-            )
+        db_manager = get_db_manager()
 
-            for flight in flights:
-                session.expunge(flight)
+        with db_manager.get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
+                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
+                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
+                    f.status, f.created_at, f.updated_at,
+                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
+                    a.business_seats, a.first_class_seats
+                FROM flights f
+                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                WHERE f.flight_number ILIKE %s
+                ORDER BY f.departure_time DESC
+            """, (f'%{flight_number}%',))
+
+            rows = cursor.fetchall()
+            flights = []
+            for row in rows:
+                flight = row_to_flight(row)
+
+                # Add aircraft data
+                if row.get('a_id'):
+                    aircraft_data = {
+                        'id': row['a_id'],
+                        'model': row['model'],
+                        'manufacturer': row['manufacturer'],
+                        'total_seats': row['total_seats'],
+                        'economy_seats': row['economy_seats'],
+                        'business_seats': row['business_seats'],
+                        'first_class_seats': row['first_class_seats']
+                    }
+                    flight.aircraft = row_to_aircraft(aircraft_data)
+
+                flights.append(flight)
 
             return flights
-        finally:
-            session.close()

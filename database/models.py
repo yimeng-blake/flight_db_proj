@@ -1,17 +1,11 @@
 """
 Database models for Airline Reservation System
-Implements comprehensive schema with proper relationships and constraints
+Plain Python classes and enums (no ORM)
 """
-from sqlalchemy import (
-    Column, Integer, String, DateTime, Float, Boolean, ForeignKey,
-    CheckConstraint, UniqueConstraint, Index, Enum as SQLEnum
-)
-from sqlalchemy.orm import declarative_base, relationship
-from sqlalchemy.sql import func
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 import enum
-
-Base = declarative_base()
 
 
 class UserRole(enum.Enum):
@@ -51,237 +45,166 @@ class LoyaltyTier(enum.Enum):
     PLATINUM = "platinum"
 
 
-class User(Base):
+@dataclass
+class User:
     """User model for authentication and authorization"""
-    __tablename__ = 'users'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
-    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.CUSTOMER)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationship
-    passenger = relationship("Passenger", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    id: Optional[int] = None
+    email: Optional[str] = None
+    password_hash: Optional[str] = None
+    role: Optional[UserRole] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     def __repr__(self):
-        return f"<User(id={self.id}, email='{self.email}', role={self.role.value})>"
+        return f"<User(id={self.id}, email='{self.email}', role={self.role.value if self.role else None})>"
 
 
-class Passenger(Base):
+@dataclass
+class Passenger:
     """Passenger model with detailed profile information"""
-    __tablename__ = 'passengers'
+    id: Optional[int] = None
+    user_id: Optional[int] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    date_of_birth: Optional[datetime] = None
+    passport_number: Optional[str] = None
+    nationality: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), unique=True, nullable=False)
-    first_name = Column(String(100), nullable=False)
-    last_name = Column(String(100), nullable=False)
-    date_of_birth = Column(DateTime, nullable=False)
-    passport_number = Column(String(50), unique=True, nullable=False, index=True)
-    nationality = Column(String(100), nullable=False)
-    phone = Column(String(20), nullable=False)
-    address = Column(String(500))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    user = relationship("User", back_populates="passenger")
-    bookings = relationship("Booking", back_populates="passenger", cascade="all, delete-orphan")
-    loyalty_account = relationship("FrequentFlyer", back_populates="passenger", uselist=False, cascade="all, delete-orphan")
-
-    __table_args__ = (
-        Index('idx_passenger_name', 'last_name', 'first_name'),
-    )
+    # For joined queries
+    user: Optional[User] = None
+    loyalty_account: Optional['FrequentFlyer'] = None
 
     def __repr__(self):
         return f"<Passenger(id={self.id}, name='{self.first_name} {self.last_name}', passport='{self.passport_number}')>"
 
 
-class Aircraft(Base):
+@dataclass
+class Aircraft:
     """Aircraft model defining plane types and capacities"""
-    __tablename__ = 'aircraft'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    model = Column(String(100), nullable=False)
-    manufacturer = Column(String(100), nullable=False)
-    total_seats = Column(Integer, nullable=False)
-    economy_seats = Column(Integer, nullable=False)
-    business_seats = Column(Integer, nullable=False)
-    first_class_seats = Column(Integer, nullable=False)
-
-    # Relationships
-    flights = relationship("Flight", back_populates="aircraft")
-
-    __table_args__ = (
-        CheckConstraint('total_seats = economy_seats + business_seats + first_class_seats',
-                       name='check_total_seats'),
-        CheckConstraint('total_seats > 0', name='check_positive_seats'),
-    )
+    id: Optional[int] = None
+    model: Optional[str] = None
+    manufacturer: Optional[str] = None
+    total_seats: Optional[int] = None
+    economy_seats: Optional[int] = None
+    business_seats: Optional[int] = None
+    first_class_seats: Optional[int] = None
 
     def __repr__(self):
         return f"<Aircraft(id={self.id}, model='{self.model}', total_seats={self.total_seats})>"
 
 
-class Flight(Base):
+@dataclass
+class Flight:
     """Flight model with schedule and capacity information"""
-    __tablename__ = 'flights'
+    id: Optional[int] = None
+    flight_number: Optional[str] = None
+    aircraft_id: Optional[int] = None
+    origin: Optional[str] = None
+    destination: Optional[str] = None
+    departure_time: Optional[datetime] = None
+    arrival_time: Optional[datetime] = None
+    base_price_economy: Optional[float] = None
+    base_price_business: Optional[float] = None
+    base_price_first: Optional[float] = None
+    available_economy: Optional[int] = None
+    available_business: Optional[int] = None
+    available_first: Optional[int] = None
+    status: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    flight_number = Column(String(10), unique=True, nullable=False, index=True)
-    aircraft_id = Column(Integer, ForeignKey('aircraft.id', ondelete='RESTRICT'), nullable=False)
-    origin = Column(String(100), nullable=False)
-    destination = Column(String(100), nullable=False)
-    departure_time = Column(DateTime(timezone=True), nullable=False)
-    arrival_time = Column(DateTime(timezone=True), nullable=False)
-    base_price_economy = Column(Float, nullable=False)
-    base_price_business = Column(Float, nullable=False)
-    base_price_first = Column(Float, nullable=False)
-    available_economy = Column(Integer, nullable=False)
-    available_business = Column(Integer, nullable=False)
-    available_first = Column(Integer, nullable=False)
-    status = Column(String(20), nullable=False, default='scheduled')  # scheduled, boarding, departed, arrived, cancelled
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    aircraft = relationship("Aircraft", back_populates="flights")
-    bookings = relationship("Booking", back_populates="flight", cascade="all, delete-orphan")
-    seats = relationship("Seat", back_populates="flight", cascade="all, delete-orphan")
-
-    __table_args__ = (
-        CheckConstraint('departure_time < arrival_time', name='check_flight_times'),
-        CheckConstraint(
-            '(available_economy = 0 AND base_price_economy >= 0) OR '
-            '(available_economy <> 0 AND base_price_economy > 0)',
-            name='check_economy_price'
-        ),
-        CheckConstraint(
-            '(available_business = 0 AND base_price_business >= 0) OR '
-            '(available_business <> 0 AND base_price_business > 0)',
-            name='check_business_price'
-        ),
-        CheckConstraint(
-            '(available_first = 0 AND base_price_first >= 0) OR '
-            '(available_first <> 0 AND base_price_first > 0)',
-            name='check_first_price'
-        ),
-        CheckConstraint('available_economy >= 0', name='check_available_economy'),
-        CheckConstraint('available_business >= 0', name='check_available_business'),
-        CheckConstraint('available_first >= 0', name='check_available_first'),
-        Index('idx_flight_route', 'origin', 'destination'),
-        Index('idx_flight_departure', 'departure_time'),
-    )
+    # For joined queries
+    aircraft: Optional[Aircraft] = None
+    seats: Optional[list] = None
 
     def __repr__(self):
         return f"<Flight(id={self.id}, number='{self.flight_number}', route='{self.origin}->{self.destination}')>"
 
 
-class Seat(Base):
+@dataclass
+class Seat:
     """Seat model for individual seat tracking"""
-    __tablename__ = 'seats'
+    id: Optional[int] = None
+    flight_id: Optional[int] = None
+    seat_number: Optional[str] = None
+    seat_class: Optional[SeatClass] = None
+    is_available: Optional[bool] = None
+    is_window: Optional[bool] = None
+    is_aisle: Optional[bool] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    flight_id = Column(Integer, ForeignKey('flights.id', ondelete='CASCADE'), nullable=False)
-    seat_number = Column(String(10), nullable=False)
-    seat_class = Column(SQLEnum(SeatClass), nullable=False)
-    is_available = Column(Boolean, nullable=False, default=True)
-    is_window = Column(Boolean, default=False)
-    is_aisle = Column(Boolean, default=False)
-
-    # Relationships
-    flight = relationship("Flight", back_populates="seats")
-    booking = relationship("Booking", back_populates="seat", uselist=False)
-
-    __table_args__ = (
-        UniqueConstraint('flight_id', 'seat_number', name='unique_flight_seat'),
-        Index('idx_seat_availability', 'flight_id', 'is_available'),
-    )
+    # For joined queries
+    flight: Optional[Flight] = None
 
     def __repr__(self):
-        return f"<Seat(id={self.id}, flight_id={self.flight_id}, number='{self.seat_number}', class={self.seat_class.value})>"
+        return f"<Seat(id={self.id}, flight_id={self.flight_id}, number='{self.seat_number}', class={self.seat_class.value if self.seat_class else None})>"
 
 
-class Booking(Base):
+@dataclass
+class Booking:
     """Booking model linking passengers to flights"""
-    __tablename__ = 'bookings'
+    id: Optional[int] = None
+    booking_reference: Optional[str] = None
+    passenger_id: Optional[int] = None
+    flight_id: Optional[int] = None
+    seat_id: Optional[int] = None
+    seat_class: Optional[SeatClass] = None
+    price: Optional[float] = None
+    status: Optional[BookingStatus] = None
+    booking_date: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    booking_reference = Column(String(10), unique=True, nullable=False, index=True)
-    passenger_id = Column(Integer, ForeignKey('passengers.id', ondelete='CASCADE'), nullable=False)
-    flight_id = Column(Integer, ForeignKey('flights.id', ondelete='RESTRICT'), nullable=False)
-    seat_id = Column(Integer, ForeignKey('seats.id', ondelete='RESTRICT'), nullable=True)
-    seat_class = Column(SQLEnum(SeatClass), nullable=False)
-    price = Column(Float, nullable=False)
-    status = Column(SQLEnum(BookingStatus), nullable=False, default=BookingStatus.PENDING)
-    booking_date = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    passenger = relationship("Passenger", back_populates="bookings")
-    flight = relationship("Flight", back_populates="bookings")
-    seat = relationship("Seat", back_populates="booking")
-    payment = relationship("Payment", back_populates="booking", uselist=False, cascade="all, delete-orphan")
-
-    __table_args__ = (
-        CheckConstraint('price > 0', name='check_booking_price'),
-        Index('idx_booking_passenger', 'passenger_id'),
-        Index('idx_booking_flight', 'flight_id'),
-        Index('idx_booking_date', 'booking_date'),
-    )
+    # For joined queries
+    passenger: Optional[Passenger] = None
+    flight: Optional[Flight] = None
+    seat: Optional[Seat] = None
+    payment: Optional['Payment'] = None
 
     def __repr__(self):
-        return f"<Booking(id={self.id}, ref='{self.booking_reference}', status={self.status.value})>"
+        return f"<Booking(id={self.id}, ref='{self.booking_reference}', status={self.status.value if self.status else None})>"
 
 
-class Payment(Base):
+@dataclass
+class Payment:
     """Payment model for transaction records"""
-    __tablename__ = 'payments'
+    id: Optional[int] = None
+    booking_id: Optional[int] = None
+    transaction_id: Optional[str] = None
+    amount: Optional[float] = None
+    payment_method: Optional[str] = None
+    status: Optional[PaymentStatus] = None
+    payment_date: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    booking_id = Column(Integer, ForeignKey('bookings.id', ondelete='CASCADE'), unique=True, nullable=False)
-    transaction_id = Column(String(100), unique=True, nullable=False, index=True)
-    amount = Column(Float, nullable=False)
-    payment_method = Column(String(50), nullable=False)  # credit_card, debit_card, paypal, etc.
-    status = Column(SQLEnum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
-    payment_date = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    booking = relationship("Booking", back_populates="payment")
-
-    __table_args__ = (
-        CheckConstraint('amount > 0', name='check_payment_amount'),
-    )
+    # For joined queries
+    booking: Optional[Booking] = None
 
     def __repr__(self):
-        return f"<Payment(id={self.id}, transaction_id='{self.transaction_id}', amount={self.amount}, status={self.status.value})>"
+        return f"<Payment(id={self.id}, transaction_id='{self.transaction_id}', amount={self.amount}, status={self.status.value if self.status else None})>"
 
 
-class FrequentFlyer(Base):
+@dataclass
+class FrequentFlyer:
     """Frequent flyer loyalty program model"""
-    __tablename__ = 'frequent_flyers'
+    id: Optional[int] = None
+    passenger_id: Optional[int] = None
+    membership_number: Optional[str] = None
+    points: Optional[int] = None
+    tier: Optional[LoyaltyTier] = None
+    join_date: Optional[datetime] = None
+    last_flight_date: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    passenger_id = Column(Integer, ForeignKey('passengers.id', ondelete='CASCADE'), unique=True, nullable=False)
-    membership_number = Column(String(20), unique=True, nullable=False, index=True)
-    points = Column(Integer, nullable=False, default=0)
-    tier = Column(SQLEnum(LoyaltyTier), nullable=False, default=LoyaltyTier.BRONZE)
-    join_date = Column(DateTime(timezone=True), server_default=func.now())
-    last_flight_date = Column(DateTime(timezone=True))
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    passenger = relationship("Passenger", back_populates="loyalty_account")
-
-    __table_args__ = (
-        CheckConstraint('points >= 0', name='check_points_positive'),
-    )
+    # For joined queries
+    passenger: Optional[Passenger] = None
 
     def __repr__(self):
-        return f"<FrequentFlyer(id={self.id}, membership='{self.membership_number}', points={self.points}, tier={self.tier.value})>"
+        return f"<FrequentFlyer(id={self.id}, membership='{self.membership_number}', points={self.points}, tier={self.tier.value if self.tier else None})>"
 
-    def calculate_tier(self):
+    def calculate_tier(self) -> LoyaltyTier:
         """Calculate loyalty tier based on points"""
         if self.points >= 100000:
             return LoyaltyTier.PLATINUM
@@ -295,3 +218,140 @@ class FrequentFlyer(Base):
     def update_tier(self):
         """Update tier based on current points"""
         self.tier = self.calculate_tier()
+
+
+def row_to_user(row) -> User:
+    """Convert database row to User object"""
+    if not row:
+        return None
+    return User(
+        id=row['id'],
+        email=row['email'],
+        password_hash=row['password_hash'],
+        role=UserRole(row['role']) if row['role'] else None,
+        created_at=row.get('created_at'),
+        updated_at=row.get('updated_at')
+    )
+
+
+def row_to_passenger(row) -> Passenger:
+    """Convert database row to Passenger object"""
+    if not row:
+        return None
+    return Passenger(
+        id=row['id'],
+        user_id=row['user_id'],
+        first_name=row['first_name'],
+        last_name=row['last_name'],
+        date_of_birth=row['date_of_birth'],
+        passport_number=row['passport_number'],
+        nationality=row['nationality'],
+        phone=row['phone'],
+        address=row.get('address'),
+        created_at=row.get('created_at'),
+        updated_at=row.get('updated_at')
+    )
+
+
+def row_to_aircraft(row) -> Aircraft:
+    """Convert database row to Aircraft object"""
+    if not row:
+        return None
+    return Aircraft(
+        id=row['id'],
+        model=row['model'],
+        manufacturer=row['manufacturer'],
+        total_seats=row['total_seats'],
+        economy_seats=row['economy_seats'],
+        business_seats=row['business_seats'],
+        first_class_seats=row['first_class_seats']
+    )
+
+
+def row_to_flight(row) -> Flight:
+    """Convert database row to Flight object"""
+    if not row:
+        return None
+    return Flight(
+        id=row['id'],
+        flight_number=row['flight_number'],
+        aircraft_id=row['aircraft_id'],
+        origin=row['origin'],
+        destination=row['destination'],
+        departure_time=row['departure_time'],
+        arrival_time=row['arrival_time'],
+        base_price_economy=row['base_price_economy'],
+        base_price_business=row['base_price_business'],
+        base_price_first=row['base_price_first'],
+        available_economy=row['available_economy'],
+        available_business=row['available_business'],
+        available_first=row['available_first'],
+        status=row['status'],
+        created_at=row.get('created_at'),
+        updated_at=row.get('updated_at')
+    )
+
+
+def row_to_seat(row) -> Seat:
+    """Convert database row to Seat object"""
+    if not row:
+        return None
+    return Seat(
+        id=row['id'],
+        flight_id=row['flight_id'],
+        seat_number=row['seat_number'],
+        seat_class=SeatClass(row['seat_class']) if row['seat_class'] else None,
+        is_available=row['is_available'],
+        is_window=row.get('is_window', False),
+        is_aisle=row.get('is_aisle', False)
+    )
+
+
+def row_to_booking(row) -> Booking:
+    """Convert database row to Booking object"""
+    if not row:
+        return None
+    return Booking(
+        id=row['id'],
+        booking_reference=row['booking_reference'],
+        passenger_id=row['passenger_id'],
+        flight_id=row['flight_id'],
+        seat_id=row.get('seat_id'),
+        seat_class=SeatClass(row['seat_class']) if row['seat_class'] else None,
+        price=row['price'],
+        status=BookingStatus(row['status']) if row['status'] else None,
+        booking_date=row.get('booking_date'),
+        updated_at=row.get('updated_at')
+    )
+
+
+def row_to_payment(row) -> Payment:
+    """Convert database row to Payment object"""
+    if not row:
+        return None
+    return Payment(
+        id=row['id'],
+        booking_id=row['booking_id'],
+        transaction_id=row['transaction_id'],
+        amount=row['amount'],
+        payment_method=row['payment_method'],
+        status=PaymentStatus(row['status']) if row['status'] else None,
+        payment_date=row.get('payment_date'),
+        updated_at=row.get('updated_at')
+    )
+
+
+def row_to_frequent_flyer(row) -> FrequentFlyer:
+    """Convert database row to FrequentFlyer object"""
+    if not row:
+        return None
+    return FrequentFlyer(
+        id=row['id'],
+        passenger_id=row['passenger_id'],
+        membership_number=row['membership_number'],
+        points=row['points'],
+        tier=LoyaltyTier(row['tier']) if row['tier'] else None,
+        join_date=row.get('join_date'),
+        last_flight_date=row.get('last_flight_date'),
+        updated_at=row.get('updated_at')
+    )
