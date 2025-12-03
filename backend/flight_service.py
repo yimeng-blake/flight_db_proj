@@ -8,6 +8,43 @@ from psycopg2.extras import RealDictCursor
 from database import Flight, Aircraft, Seat, SeatClass, row_to_flight, row_to_aircraft, row_to_seat, get_db_manager
 
 
+# SQL column selection constants for optimized queries
+# Aircraft columns with a_ prefix for joined queries
+_AIRCRAFT_COLS = """a.id as a_id, a.model, a.manufacturer, a.total_seats,
+    a.economy_seats, a.business_seats, a.first_class_seats"""
+
+# Flight with aircraft query template
+_FLIGHT_WITH_AIRCRAFT_QUERY = f"""
+    SELECT f.*, {_AIRCRAFT_COLS}
+    FROM flights f
+    LEFT JOIN aircraft a ON f.aircraft_id = a.id
+"""
+
+
+def _build_aircraft_from_row(row) -> Optional[Aircraft]:
+    """Build an Aircraft object from a joined row with a_ prefixed columns."""
+    if not row.get('a_id'):
+        return None
+    return Aircraft(
+        id=row['a_id'],
+        model=row['model'],
+        manufacturer=row['manufacturer'],
+        total_seats=row['total_seats'],
+        economy_seats=row['economy_seats'],
+        business_seats=row['business_seats'],
+        first_class_seats=row['first_class_seats']
+    )
+
+
+def _build_flight_with_aircraft(row) -> Optional[Flight]:
+    """Build a Flight object with aircraft relation from a joined row."""
+    if not row:
+        return None
+    flight = row_to_flight(row)
+    flight.aircraft = _build_aircraft_from_row(row)
+    return flight
+
+
 class FlightService:
     """Service for flight management operations"""
 
@@ -240,39 +277,9 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status, f.created_at, f.updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats
-                FROM flights f
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                WHERE f.id = %s
-            """, (flight_id,))
-
+            cursor.execute(f"{_FLIGHT_WITH_AIRCRAFT_QUERY} WHERE f.id = %s", (flight_id,))
             row = cursor.fetchone()
-            if not row:
-                return None
-
-            flight = row_to_flight(row)
-
-            # Add aircraft data
-            if row.get('a_id'):
-                aircraft_data = {
-                    'id': row['a_id'],
-                    'model': row['model'],
-                    'manufacturer': row['manufacturer'],
-                    'total_seats': row['total_seats'],
-                    'economy_seats': row['economy_seats'],
-                    'business_seats': row['business_seats'],
-                    'first_class_seats': row['first_class_seats']
-                }
-                flight.aircraft = row_to_aircraft(aircraft_data)
-
-            return flight
+            return _build_flight_with_aircraft(row)
 
     @staticmethod
     def get_flight_by_number(flight_number: str):
@@ -280,39 +287,9 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status, f.created_at, f.updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats
-                FROM flights f
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                WHERE f.flight_number = %s
-            """, (flight_number,))
-
+            cursor.execute(f"{_FLIGHT_WITH_AIRCRAFT_QUERY} WHERE f.flight_number = %s", (flight_number,))
             row = cursor.fetchone()
-            if not row:
-                return None
-
-            flight = row_to_flight(row)
-
-            # Add aircraft data
-            if row.get('a_id'):
-                aircraft_data = {
-                    'id': row['a_id'],
-                    'model': row['model'],
-                    'manufacturer': row['manufacturer'],
-                    'total_seats': row['total_seats'],
-                    'economy_seats': row['economy_seats'],
-                    'business_seats': row['business_seats'],
-                    'first_class_seats': row['first_class_seats']
-                }
-                flight.aircraft = row_to_aircraft(aircraft_data)
-
-            return flight
+            return _build_flight_with_aircraft(row)
 
     @staticmethod
     def search_flights(origin: Optional[str] = None, destination: Optional[str] = None,
@@ -334,7 +311,6 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            # Build query dynamically
             conditions = ["f.status = 'scheduled'"]
             params = []
 
@@ -347,7 +323,6 @@ class FlightService:
                 params.append(f'%{destination}%')
 
             if departure_date or end_date:
-                # Support single-day searches as well as date ranges
                 start_anchor = departure_date or end_date
                 end_anchor = end_date or departure_date
 
@@ -360,47 +335,19 @@ class FlightService:
                 conditions.append("f.departure_time >= %s AND f.departure_time <= %s")
                 params.extend([start_of_window, end_of_window])
 
-            # Filter by available seats
             conditions.append("(f.available_economy >= %s OR f.available_business >= %s OR f.available_first >= %s)")
             params.extend([min_seats, min_seats, min_seats])
 
             where_clause = " AND ".join(conditions)
 
             cursor.execute(f"""
-                SELECT
-                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status, f.created_at, f.updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats
-                FROM flights f
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+                {_FLIGHT_WITH_AIRCRAFT_QUERY}
                 WHERE {where_clause}
                 ORDER BY f.departure_time
             """, params)
 
             rows = cursor.fetchall()
-            flights = []
-            for row in rows:
-                flight = row_to_flight(row)
-
-                # Add aircraft data
-                if row.get('a_id'):
-                    aircraft_data = {
-                        'id': row['a_id'],
-                        'model': row['model'],
-                        'manufacturer': row['manufacturer'],
-                        'total_seats': row['total_seats'],
-                        'economy_seats': row['economy_seats'],
-                        'business_seats': row['business_seats'],
-                        'first_class_seats': row['first_class_seats']
-                    }
-                    flight.aircraft = row_to_aircraft(aircraft_data)
-
-                flights.append(flight)
-
-            return flights
+            return [_build_flight_with_aircraft(row) for row in rows]
 
     @staticmethod
     def update_flight(flight_id: int, **kwargs):
@@ -524,44 +471,14 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("""
-                SELECT
-                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status, f.created_at, f.updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats
-                FROM flights f
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+            cursor.execute(f"""
+                {_FLIGHT_WITH_AIRCRAFT_QUERY}
                 ORDER BY f.departure_time DESC
                 LIMIT %s OFFSET %s
             """, (limit, offset))
 
             rows = cursor.fetchall()
-            if not rows:
-                return []
-
-            flights = []
-            for row in rows:
-                flight = row_to_flight(row)
-
-                # Add aircraft data
-                if row.get('a_id'):
-                    aircraft_data = {
-                        'id': row['a_id'],
-                        'model': row['model'],
-                        'manufacturer': row['manufacturer'],
-                        'total_seats': row['total_seats'],
-                        'economy_seats': row['economy_seats'],
-                        'business_seats': row['business_seats'],
-                        'first_class_seats': row['first_class_seats']
-                    }
-                    flight.aircraft = row_to_aircraft(aircraft_data)
-
-                flights.append(flight)
-
-            return flights
+            return [_build_flight_with_aircraft(row) for row in rows]
 
     @staticmethod
     def search_flights_by_number(flight_number: str) -> List[Flight]:
@@ -572,41 +489,11 @@ class FlightService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("""
-                SELECT
-                    f.id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status, f.created_at, f.updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats
-                FROM flights f
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
+            cursor.execute(f"""
+                {_FLIGHT_WITH_AIRCRAFT_QUERY}
                 WHERE f.flight_number ILIKE %s
                 ORDER BY f.departure_time DESC
             """, (f'%{flight_number}%',))
 
             rows = cursor.fetchall()
-            if not rows:
-                return []
-
-            flights = []
-            for row in rows:
-                flight = row_to_flight(row)
-
-                # Add aircraft data
-                if row.get('a_id'):
-                    aircraft_data = {
-                        'id': row['a_id'],
-                        'model': row['model'],
-                        'manufacturer': row['manufacturer'],
-                        'total_seats': row['total_seats'],
-                        'economy_seats': row['economy_seats'],
-                        'business_seats': row['business_seats'],
-                        'first_class_seats': row['first_class_seats']
-                    }
-                    flight.aircraft = row_to_aircraft(aircraft_data)
-
-                flights.append(flight)
-
-            return flights
+            return [_build_flight_with_aircraft(row) for row in rows]

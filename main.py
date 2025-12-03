@@ -4,12 +4,8 @@ Provides a menu to launch admin or customer interface
 """
 import sys
 
-try:  # Prefer PyQt6 but fall back to PySide6 when unavailable
-    from PyQt6.QtWidgets import QApplication, QDialog, QVBoxLayout, QPushButton, QLabel
-    from PyQt6.QtCore import Qt
-except ModuleNotFoundError:  # pragma: no cover - environment specific
-    from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QPushButton, QLabel
-    from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout, QPushButton, QLabel
+from PySide6.QtCore import Qt
 
 from database.database import get_db_manager
 
@@ -72,10 +68,7 @@ class LauncherDialog(QDialog):
 
     def launch_customer(self):
         """Launch customer interface"""
-        try:
-            from PyQt6.QtWidgets import QInputDialog, QMessageBox
-        except ModuleNotFoundError:  # pragma: no cover - environment specific
-            from PySide6.QtWidgets import QInputDialog, QMessageBox
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
 
         # For demo, ask for passenger ID
         # In production, this would be from login
@@ -97,10 +90,7 @@ class LauncherDialog(QDialog):
 
     def generate_data(self):
         """Generate sample data"""
-        try:
-            from PyQt6.QtWidgets import QMessageBox
-        except ModuleNotFoundError:  # pragma: no cover - environment specific
-            from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox
         from data.data_generator import DataGenerator
 
         reply = QMessageBox.question(

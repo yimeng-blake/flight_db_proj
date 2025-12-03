@@ -18,6 +18,198 @@ from database import (
 from database.database import get_db_manager
 
 
+# SQL column selection constants for optimized queries
+# Using table.* for primary columns with explicit aliases for joined tables
+
+# Seat columns with s_ prefix
+_SEAT_COLS = """s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
+    s.seat_class as s_seat_class, s.is_available, s.is_window, s.is_aisle"""
+
+# Flight columns with f_ prefix
+_FLIGHT_COLS = """f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
+    f.destination, f.departure_time, f.arrival_time,
+    f.base_price_economy, f.base_price_business, f.base_price_first,
+    f.available_economy, f.available_business, f.available_first,
+    f.status as f_status, f.created_at as f_created_at, f.updated_at as f_updated_at"""
+
+# Aircraft columns with a_ prefix
+_AIRCRAFT_COLS = """a.id as a_id, a.model, a.manufacturer, a.total_seats,
+    a.economy_seats, a.business_seats, a.first_class_seats"""
+
+# Passenger columns with p_ prefix
+_PASSENGER_COLS = """p.id as p_id, p.user_id, p.first_name, p.last_name,
+    p.date_of_birth, p.passport_number, p.nationality, p.phone,
+    p.address, p.created_at as p_created_at, p.updated_at as p_updated_at"""
+
+# User columns with u_ prefix
+_USER_COLS = """u.id as u_id, u.email, u.password_hash, u.role,
+    u.created_at as u_created_at, u.updated_at as u_updated_at"""
+
+# FrequentFlyer columns with ff_ prefix
+_FF_COLS = """ff.id as ff_id, ff.passenger_id as ff_passenger_id,
+    ff.membership_number, ff.points, ff.tier, ff.join_date,
+    ff.last_flight_date, ff.updated_at as ff_updated_at"""
+
+# Combined query templates
+_BOOKING_FULL_QUERY = f"""
+    SELECT b.*, {_SEAT_COLS}, {_FLIGHT_COLS}, {_AIRCRAFT_COLS}, {_PASSENGER_COLS}, {_USER_COLS}
+    FROM bookings b
+    LEFT JOIN seats s ON b.seat_id = s.id
+    LEFT JOIN flights f ON b.flight_id = f.id
+    LEFT JOIN aircraft a ON f.aircraft_id = a.id
+    LEFT JOIN passengers p ON b.passenger_id = p.id
+    LEFT JOIN users u ON p.user_id = u.id
+"""
+
+_BOOKING_WITH_LOYALTY_QUERY = f"""
+    SELECT b.*, {_SEAT_COLS}, {_FLIGHT_COLS}, {_PASSENGER_COLS}, {_FF_COLS}
+    FROM bookings b
+    LEFT JOIN seats s ON b.seat_id = s.id
+    LEFT JOIN flights f ON b.flight_id = f.id
+    LEFT JOIN passengers p ON b.passenger_id = p.id
+    LEFT JOIN frequent_flyers ff ON p.id = ff.passenger_id
+"""
+
+
+def _build_seat_from_row(row) -> Optional[Seat]:
+    """Build a Seat object from a joined row with s_ prefixed columns."""
+    if not row.get('s_id'):
+        return None
+    return Seat(
+        id=row['s_id'],
+        flight_id=row['s_flight_id'],
+        seat_number=row['seat_number'],
+        seat_class=SeatClass(row['s_seat_class']) if row['s_seat_class'] else None,
+        is_available=row['is_available'],
+        is_window=row.get('is_window', False),
+        is_aisle=row.get('is_aisle', False)
+    )
+
+
+def _build_flight_from_row(row) -> Optional[Flight]:
+    """Build a Flight object from a joined row with f_ prefixed columns."""
+    if not row.get('f_id'):
+        return None
+    return Flight(
+        id=row['f_id'],
+        flight_number=row['flight_number'],
+        aircraft_id=row['aircraft_id'],
+        origin=row['origin'],
+        destination=row['destination'],
+        departure_time=row['departure_time'],
+        arrival_time=row['arrival_time'],
+        base_price_economy=row['base_price_economy'],
+        base_price_business=row['base_price_business'],
+        base_price_first=row['base_price_first'],
+        available_economy=row['available_economy'],
+        available_business=row['available_business'],
+        available_first=row['available_first'],
+        status=row['f_status'],
+        created_at=row.get('f_created_at'),
+        updated_at=row.get('f_updated_at')
+    )
+
+
+def _build_aircraft_from_row(row) -> Optional['Aircraft']:
+    """Build an Aircraft object from a joined row with a_ prefixed columns."""
+    if not row.get('a_id'):
+        return None
+    from database import Aircraft
+    return Aircraft(
+        id=row['a_id'],
+        model=row['model'],
+        manufacturer=row['manufacturer'],
+        total_seats=row['total_seats'],
+        economy_seats=row['economy_seats'],
+        business_seats=row['business_seats'],
+        first_class_seats=row['first_class_seats']
+    )
+
+
+def _build_passenger_from_row(row) -> Optional[Passenger]:
+    """Build a Passenger object from a joined row with p_ prefixed columns."""
+    if not row.get('p_id'):
+        return None
+    return Passenger(
+        id=row['p_id'],
+        user_id=row['user_id'],
+        first_name=row['first_name'],
+        last_name=row['last_name'],
+        date_of_birth=row['date_of_birth'],
+        passport_number=row['passport_number'],
+        nationality=row['nationality'],
+        phone=row['phone'],
+        address=row.get('address'),
+        created_at=row.get('p_created_at'),
+        updated_at=row.get('p_updated_at')
+    )
+
+
+def _build_user_from_row(row) -> Optional['User']:
+    """Build a User object from a joined row with u_ prefixed columns."""
+    if not row.get('u_id'):
+        return None
+    from database import User, UserRole
+    return User(
+        id=row['u_id'],
+        email=row['email'],
+        password_hash=row['password_hash'],
+        role=UserRole(row['role']) if row['role'] else None,
+        created_at=row.get('u_created_at'),
+        updated_at=row.get('u_updated_at')
+    )
+
+
+def _build_frequent_flyer_from_row(row) -> Optional[FrequentFlyer]:
+    """Build a FrequentFlyer object from a joined row with ff_ prefixed columns."""
+    if not row.get('ff_id'):
+        return None
+    return FrequentFlyer(
+        id=row['ff_id'],
+        passenger_id=row['ff_passenger_id'],
+        membership_number=row['membership_number'],
+        points=row['points'],
+        tier=LoyaltyTier(row['tier']) if row['tier'] else None,
+        join_date=row.get('join_date'),
+        last_flight_date=row.get('last_flight_date'),
+        updated_at=row.get('ff_updated_at')
+    )
+
+
+def _build_booking_with_relations(row, include_aircraft=False, include_user=False, include_loyalty=False) -> Optional[Booking]:
+    """
+    Build a complete Booking object with all relations from a joined row.
+
+    Args:
+        row: Database row from a joined query
+        include_aircraft: Whether to include aircraft data on the flight
+        include_user: Whether to include user data on the passenger
+        include_loyalty: Whether to include loyalty account on the passenger
+
+    Returns:
+        Booking object with populated relations
+    """
+    if not row:
+        return None
+
+    booking = row_to_booking(row)
+    booking.seat = _build_seat_from_row(row)
+    booking.flight = _build_flight_from_row(row)
+
+    if booking.flight and include_aircraft:
+        booking.flight.aircraft = _build_aircraft_from_row(row)
+
+    booking.passenger = _build_passenger_from_row(row)
+
+    if booking.passenger:
+        if include_user:
+            booking.passenger.user = _build_user_from_row(row)
+        if include_loyalty:
+            booking.passenger.loyalty_account = _build_frequent_flyer_from_row(row)
+
+    return booking
+
+
 class BookingService:
     """Service for booking operations with transaction safety"""
 
@@ -364,100 +556,12 @@ class BookingService:
                 booking_id = cursor.fetchone()['id']
 
                 # Fetch the complete booking with all joins
-                cursor.execute("""
-                    SELECT
-                        b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                        b.seat_id, b.seat_class, b.price, b.status,
-                        b.booking_date, b.updated_at,
-                        s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                        s.seat_class as s_seat_class, s.is_available,
-                        s.is_window, s.is_aisle,
-                        f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                        f.destination, f.departure_time, f.arrival_time,
-                        f.base_price_economy, f.base_price_business, f.base_price_first,
-                        f.available_economy, f.available_business, f.available_first,
-                        f.status as f_status, f.created_at as f_created_at,
-                        f.updated_at as f_updated_at,
-                        p.id as p_id, p.user_id, p.first_name, p.last_name,
-                        p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                        p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                        ff.id as ff_id, ff.passenger_id as ff_passenger_id,
-                        ff.membership_number, ff.points, ff.tier, ff.join_date,
-                        ff.last_flight_date, ff.updated_at as ff_updated_at
-                    FROM bookings b
-                    LEFT JOIN seats s ON b.seat_id = s.id
-                    LEFT JOIN flights f ON b.flight_id = f.id
-                    LEFT JOIN passengers p ON b.passenger_id = p.id
-                    LEFT JOIN frequent_flyers ff ON p.id = ff.passenger_id
-                    WHERE b.id = %s
-                """, (booking_id,))
-
+                cursor.execute(f"{_BOOKING_WITH_LOYALTY_QUERY} WHERE b.id = %s", (booking_id,))
                 row = cursor.fetchone()
                 if not row:
                     raise ValueError("Failed to create booking")
 
-                # Build booking object with relations
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = Seat(
-                        id=row['s_id'],
-                        flight_id=row['s_flight_id'],
-                        seat_number=row['seat_number'],
-                        seat_class=SeatClass(row['s_seat_class']) if row['s_seat_class'] else None,
-                        is_available=row['is_available'],
-                        is_window=row.get('is_window', False),
-                        is_aisle=row.get('is_aisle', False)
-                    )
-
-                if row.get('f_id'):
-                    booking.flight = Flight(
-                        id=row['f_id'],
-                        flight_number=row['flight_number'],
-                        aircraft_id=row['aircraft_id'],
-                        origin=row['origin'],
-                        destination=row['destination'],
-                        departure_time=row['departure_time'],
-                        arrival_time=row['arrival_time'],
-                        base_price_economy=row['base_price_economy'],
-                        base_price_business=row['base_price_business'],
-                        base_price_first=row['base_price_first'],
-                        available_economy=row['available_economy'],
-                        available_business=row['available_business'],
-                        available_first=row['available_first'],
-                        status=row['f_status'],
-                        created_at=row.get('f_created_at'),
-                        updated_at=row.get('f_updated_at')
-                    )
-
-                if row.get('p_id'):
-                    booking.passenger = Passenger(
-                        id=row['p_id'],
-                        user_id=row['user_id'],
-                        first_name=row['first_name'],
-                        last_name=row['last_name'],
-                        date_of_birth=row['date_of_birth'],
-                        passport_number=row['passport_number'],
-                        nationality=row['nationality'],
-                        phone=row['phone'],
-                        address=row.get('address'),
-                        created_at=row.get('p_created_at'),
-                        updated_at=row.get('p_updated_at')
-                    )
-
-                    if row.get('ff_id'):
-                        booking.passenger.loyalty_account = FrequentFlyer(
-                            id=row['ff_id'],
-                            passenger_id=row['ff_passenger_id'],
-                            membership_number=row['membership_number'],
-                            points=row['points'],
-                            tier=LoyaltyTier(row['tier']) if row['tier'] else None,
-                            join_date=row.get('join_date'),
-                            last_flight_date=row.get('last_flight_date'),
-                            updated_at=row.get('ff_updated_at')
-                        )
-
-                return booking
+                return _build_booking_with_relations(row, include_loyalty=True)
 
     @staticmethod
     def get_booking(booking_id: int):
@@ -465,111 +569,9 @@ class BookingService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                    b.seat_id, b.seat_class, b.price, b.status,
-                    b.booking_date, b.updated_at,
-                    s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                    s.seat_class as s_seat_class, s.is_available,
-                    s.is_window, s.is_aisle,
-                    f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                    f.destination, f.departure_time, f.arrival_time,
-                    f.base_price_economy, f.base_price_business, f.base_price_first,
-                    f.available_economy, f.available_business, f.available_first,
-                    f.status as f_status, f.created_at as f_created_at,
-                    f.updated_at as f_updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats,
-                    a.economy_seats, a.business_seats, a.first_class_seats,
-                    p.id as p_id, p.user_id, p.first_name, p.last_name,
-                    p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                    p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                    u.id as u_id, u.email, u.password_hash, u.role,
-                    u.created_at as u_created_at, u.updated_at as u_updated_at
-                FROM bookings b
-                LEFT JOIN seats s ON b.seat_id = s.id
-                LEFT JOIN flights f ON b.flight_id = f.id
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                LEFT JOIN passengers p ON b.passenger_id = p.id
-                LEFT JOIN users u ON p.user_id = u.id
-                WHERE b.id = %s
-            """, (booking_id,))
-
+            cursor.execute(f"{_BOOKING_FULL_QUERY} WHERE b.id = %s", (booking_id,))
             row = cursor.fetchone()
-            if not row:
-                return None
-
-            # Build booking object with relations
-            booking = row_to_booking(row)
-
-            if row.get('s_id'):
-                booking.seat = row_to_seat({
-                    'id': row['s_id'],
-                    'flight_id': row['s_flight_id'],
-                    'seat_number': row['seat_number'],
-                    'seat_class': row['s_seat_class'],
-                    'is_available': row['is_available'],
-                    'is_window': row.get('is_window', False),
-                    'is_aisle': row.get('is_aisle', False)
-                })
-
-            if row.get('f_id'):
-                booking.flight = row_to_flight({
-                    'id': row['f_id'],
-                    'flight_number': row['flight_number'],
-                    'aircraft_id': row['aircraft_id'],
-                    'origin': row['origin'],
-                    'destination': row['destination'],
-                    'departure_time': row['departure_time'],
-                    'arrival_time': row['arrival_time'],
-                    'base_price_economy': row['base_price_economy'],
-                    'base_price_business': row['base_price_business'],
-                    'base_price_first': row['base_price_first'],
-                    'available_economy': row['available_economy'],
-                    'available_business': row['available_business'],
-                    'available_first': row['available_first'],
-                    'status': row['f_status'],
-                    'created_at': row.get('f_created_at'),
-                    'updated_at': row.get('f_updated_at')
-                })
-
-                if row.get('a_id'):
-                    booking.flight.aircraft = row_to_aircraft({
-                        'id': row['a_id'],
-                        'model': row['model'],
-                        'manufacturer': row['manufacturer'],
-                        'total_seats': row['total_seats'],
-                        'economy_seats': row['economy_seats'],
-                        'business_seats': row['business_seats'],
-                        'first_class_seats': row['first_class_seats']
-                    })
-
-            if row.get('p_id'):
-                booking.passenger = row_to_passenger({
-                    'id': row['p_id'],
-                    'user_id': row['user_id'],
-                    'first_name': row['first_name'],
-                    'last_name': row['last_name'],
-                    'date_of_birth': row['date_of_birth'],
-                    'passport_number': row['passport_number'],
-                    'nationality': row['nationality'],
-                    'phone': row['phone'],
-                    'address': row.get('address'),
-                    'created_at': row.get('p_created_at'),
-                    'updated_at': row.get('p_updated_at')
-                })
-
-                if row.get('u_id'):
-                    booking.passenger.user = row_to_user({
-                        'id': row['u_id'],
-                        'email': row['email'],
-                        'password_hash': row['password_hash'],
-                        'role': row['role'],
-                        'created_at': row.get('u_created_at'),
-                        'updated_at': row.get('u_updated_at')
-                    })
-
-            return booking
+            return _build_booking_with_relations(row, include_aircraft=True, include_user=True)
 
     @staticmethod
     def get_booking_by_reference(booking_reference: str):
@@ -577,111 +579,9 @@ class BookingService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                    b.seat_id, b.seat_class, b.price, b.status,
-                    b.booking_date, b.updated_at,
-                    s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                    s.seat_class as s_seat_class, s.is_available,
-                    s.is_window, s.is_aisle,
-                    f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                    f.destination, f.departure_time, f.arrival_time,
-                    f.base_price_economy, f.base_price_business, f.base_price_first,
-                    f.available_economy, f.available_business, f.available_first,
-                    f.status as f_status, f.created_at as f_created_at,
-                    f.updated_at as f_updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats,
-                    a.economy_seats, a.business_seats, a.first_class_seats,
-                    p.id as p_id, p.user_id, p.first_name, p.last_name,
-                    p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                    p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                    u.id as u_id, u.email, u.password_hash, u.role,
-                    u.created_at as u_created_at, u.updated_at as u_updated_at
-                FROM bookings b
-                LEFT JOIN seats s ON b.seat_id = s.id
-                LEFT JOIN flights f ON b.flight_id = f.id
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                LEFT JOIN passengers p ON b.passenger_id = p.id
-                LEFT JOIN users u ON p.user_id = u.id
-                WHERE b.booking_reference = %s
-            """, (booking_reference,))
-
+            cursor.execute(f"{_BOOKING_FULL_QUERY} WHERE b.booking_reference = %s", (booking_reference,))
             row = cursor.fetchone()
-            if not row:
-                return None
-
-            # Build booking object with relations
-            booking = row_to_booking(row)
-
-            if row.get('s_id'):
-                booking.seat = row_to_seat({
-                    'id': row['s_id'],
-                    'flight_id': row['s_flight_id'],
-                    'seat_number': row['seat_number'],
-                    'seat_class': row['s_seat_class'],
-                    'is_available': row['is_available'],
-                    'is_window': row.get('is_window', False),
-                    'is_aisle': row.get('is_aisle', False)
-                })
-
-            if row.get('f_id'):
-                booking.flight = row_to_flight({
-                    'id': row['f_id'],
-                    'flight_number': row['flight_number'],
-                    'aircraft_id': row['aircraft_id'],
-                    'origin': row['origin'],
-                    'destination': row['destination'],
-                    'departure_time': row['departure_time'],
-                    'arrival_time': row['arrival_time'],
-                    'base_price_economy': row['base_price_economy'],
-                    'base_price_business': row['base_price_business'],
-                    'base_price_first': row['base_price_first'],
-                    'available_economy': row['available_economy'],
-                    'available_business': row['available_business'],
-                    'available_first': row['available_first'],
-                    'status': row['f_status'],
-                    'created_at': row.get('f_created_at'),
-                    'updated_at': row.get('f_updated_at')
-                })
-
-                if row.get('a_id'):
-                    booking.flight.aircraft = row_to_aircraft({
-                        'id': row['a_id'],
-                        'model': row['model'],
-                        'manufacturer': row['manufacturer'],
-                        'total_seats': row['total_seats'],
-                        'economy_seats': row['economy_seats'],
-                        'business_seats': row['business_seats'],
-                        'first_class_seats': row['first_class_seats']
-                    })
-
-            if row.get('p_id'):
-                booking.passenger = row_to_passenger({
-                    'id': row['p_id'],
-                    'user_id': row['user_id'],
-                    'first_name': row['first_name'],
-                    'last_name': row['last_name'],
-                    'date_of_birth': row['date_of_birth'],
-                    'passport_number': row['passport_number'],
-                    'nationality': row['nationality'],
-                    'phone': row['phone'],
-                    'address': row.get('address'),
-                    'created_at': row.get('p_created_at'),
-                    'updated_at': row.get('p_updated_at')
-                })
-
-                if row.get('u_id'):
-                    booking.passenger.user = row_to_user({
-                        'id': row['u_id'],
-                        'email': row['email'],
-                        'password_hash': row['password_hash'],
-                        'role': row['role'],
-                        'created_at': row.get('u_created_at'),
-                        'updated_at': row.get('u_updated_at')
-                    })
-
-            return booking
+            return _build_booking_with_relations(row, include_aircraft=True, include_user=True)
 
     @staticmethod
     def confirm_booking(booking_id: int, payment_successful: bool = True):
@@ -796,100 +696,9 @@ class BookingService:
                     BookingService._adjust_availability(conn, booking.flight_id, booking.seat_class, +1)
 
                 # Fetch the complete booking with all joins
-                cursor.execute("""
-                    SELECT
-                        b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                        b.seat_id, b.seat_class, b.price, b.status,
-                        b.booking_date, b.updated_at,
-                        s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                        s.seat_class as s_seat_class, s.is_available,
-                        s.is_window, s.is_aisle,
-                        f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                        f.destination, f.departure_time, f.arrival_time,
-                        f.base_price_economy, f.base_price_business, f.base_price_first,
-                        f.available_economy, f.available_business, f.available_first,
-                        f.status as f_status, f.created_at as f_created_at,
-                        f.updated_at as f_updated_at,
-                        p.id as p_id, p.user_id, p.first_name, p.last_name,
-                        p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                        p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                        ff.id as ff_id, ff.passenger_id as ff_passenger_id,
-                        ff.membership_number, ff.points, ff.tier, ff.join_date,
-                        ff.last_flight_date, ff.updated_at as ff_updated_at
-                    FROM bookings b
-                    LEFT JOIN seats s ON b.seat_id = s.id
-                    LEFT JOIN flights f ON b.flight_id = f.id
-                    LEFT JOIN passengers p ON b.passenger_id = p.id
-                    LEFT JOIN frequent_flyers ff ON p.id = ff.passenger_id
-                    WHERE b.id = %s
-                """, (booking.id,))
-
+                cursor.execute(f"{_BOOKING_WITH_LOYALTY_QUERY} WHERE b.id = %s", (booking.id,))
                 row = cursor.fetchone()
-                if not row:
-                    return None
-
-                # Build booking object with relations
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = Seat(
-                        id=row['s_id'],
-                        flight_id=row['s_flight_id'],
-                        seat_number=row['seat_number'],
-                        seat_class=SeatClass(row['s_seat_class']) if row['s_seat_class'] else None,
-                        is_available=row['is_available'],
-                        is_window=row.get('is_window', False),
-                        is_aisle=row.get('is_aisle', False)
-                    )
-
-                if row.get('f_id'):
-                    booking.flight = Flight(
-                        id=row['f_id'],
-                        flight_number=row['flight_number'],
-                        aircraft_id=row['aircraft_id'],
-                        origin=row['origin'],
-                        destination=row['destination'],
-                        departure_time=row['departure_time'],
-                        arrival_time=row['arrival_time'],
-                        base_price_economy=row['base_price_economy'],
-                        base_price_business=row['base_price_business'],
-                        base_price_first=row['base_price_first'],
-                        available_economy=row['available_economy'],
-                        available_business=row['available_business'],
-                        available_first=row['available_first'],
-                        status=row['f_status'],
-                        created_at=row.get('f_created_at'),
-                        updated_at=row.get('f_updated_at')
-                    )
-
-                if row.get('p_id'):
-                    booking.passenger = Passenger(
-                        id=row['p_id'],
-                        user_id=row['user_id'],
-                        first_name=row['first_name'],
-                        last_name=row['last_name'],
-                        date_of_birth=row['date_of_birth'],
-                        passport_number=row['passport_number'],
-                        nationality=row['nationality'],
-                        phone=row['phone'],
-                        address=row.get('address'),
-                        created_at=row.get('p_created_at'),
-                        updated_at=row.get('p_updated_at')
-                    )
-
-                    if row.get('ff_id'):
-                        booking.passenger.loyalty_account = FrequentFlyer(
-                            id=row['ff_id'],
-                            passenger_id=row['ff_passenger_id'],
-                            membership_number=row['membership_number'],
-                            points=row['points'],
-                            tier=LoyaltyTier(row['tier']) if row['tier'] else None,
-                            join_date=row.get('join_date'),
-                            last_flight_date=row.get('last_flight_date'),
-                            updated_at=row.get('ff_updated_at')
-                        )
-
-                return booking
+                return _build_booking_with_relations(row, include_loyalty=True)
 
     @staticmethod
     def cancel_booking(booking_id: int):
@@ -929,100 +738,9 @@ class BookingService:
                 BookingService._apply_cancellation_effects(conn, booking)
 
                 # Fetch the complete booking with all joins
-                cursor.execute("""
-                    SELECT
-                        b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                        b.seat_id, b.seat_class, b.price, b.status,
-                        b.booking_date, b.updated_at,
-                        s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                        s.seat_class as s_seat_class, s.is_available,
-                        s.is_window, s.is_aisle,
-                        f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                        f.destination, f.departure_time, f.arrival_time,
-                        f.base_price_economy, f.base_price_business, f.base_price_first,
-                        f.available_economy, f.available_business, f.available_first,
-                        f.status as f_status, f.created_at as f_created_at,
-                        f.updated_at as f_updated_at,
-                        p.id as p_id, p.user_id, p.first_name, p.last_name,
-                        p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                        p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                        ff.id as ff_id, ff.passenger_id as ff_passenger_id,
-                        ff.membership_number, ff.points, ff.tier, ff.join_date,
-                        ff.last_flight_date, ff.updated_at as ff_updated_at
-                    FROM bookings b
-                    LEFT JOIN seats s ON b.seat_id = s.id
-                    LEFT JOIN flights f ON b.flight_id = f.id
-                    LEFT JOIN passengers p ON b.passenger_id = p.id
-                    LEFT JOIN frequent_flyers ff ON p.id = ff.passenger_id
-                    WHERE b.id = %s
-                """, (booking.id,))
-
+                cursor.execute(f"{_BOOKING_WITH_LOYALTY_QUERY} WHERE b.id = %s", (booking.id,))
                 row = cursor.fetchone()
-                if not row:
-                    return None
-
-                # Build booking object with relations
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = Seat(
-                        id=row['s_id'],
-                        flight_id=row['s_flight_id'],
-                        seat_number=row['seat_number'],
-                        seat_class=SeatClass(row['s_seat_class']) if row['s_seat_class'] else None,
-                        is_available=row['is_available'],
-                        is_window=row.get('is_window', False),
-                        is_aisle=row.get('is_aisle', False)
-                    )
-
-                if row.get('f_id'):
-                    booking.flight = Flight(
-                        id=row['f_id'],
-                        flight_number=row['flight_number'],
-                        aircraft_id=row['aircraft_id'],
-                        origin=row['origin'],
-                        destination=row['destination'],
-                        departure_time=row['departure_time'],
-                        arrival_time=row['arrival_time'],
-                        base_price_economy=row['base_price_economy'],
-                        base_price_business=row['base_price_business'],
-                        base_price_first=row['base_price_first'],
-                        available_economy=row['available_economy'],
-                        available_business=row['available_business'],
-                        available_first=row['available_first'],
-                        status=row['f_status'],
-                        created_at=row.get('f_created_at'),
-                        updated_at=row.get('f_updated_at')
-                    )
-
-                if row.get('p_id'):
-                    booking.passenger = Passenger(
-                        id=row['p_id'],
-                        user_id=row['user_id'],
-                        first_name=row['first_name'],
-                        last_name=row['last_name'],
-                        date_of_birth=row['date_of_birth'],
-                        passport_number=row['passport_number'],
-                        nationality=row['nationality'],
-                        phone=row['phone'],
-                        address=row.get('address'),
-                        created_at=row.get('p_created_at'),
-                        updated_at=row.get('p_updated_at')
-                    )
-
-                    if row.get('ff_id'):
-                        booking.passenger.loyalty_account = FrequentFlyer(
-                            id=row['ff_id'],
-                            passenger_id=row['ff_passenger_id'],
-                            membership_number=row['membership_number'],
-                            points=row['points'],
-                            tier=LoyaltyTier(row['tier']) if row['tier'] else None,
-                            join_date=row.get('join_date'),
-                            last_flight_date=row.get('last_flight_date'),
-                            updated_at=row.get('ff_updated_at')
-                        )
-
-                return booking
+                return _build_booking_with_relations(row, include_loyalty=True)
 
     @staticmethod
     def cancel_bookings_for_flight(flight_id: int) -> int:
@@ -1108,7 +826,6 @@ class BookingService:
         db_manager = get_db_manager()
 
         with db_manager.get_cursor() as cursor:
-            # Build query with filters
             where_clauses = []
             params = []
 
@@ -1125,117 +842,17 @@ class BookingService:
                 params.append(status.value)
 
             where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-
             params.extend([limit, offset])
 
             cursor.execute(f"""
-                SELECT
-                    b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                    b.seat_id, b.seat_class, b.price, b.status,
-                    b.booking_date, b.updated_at,
-                    s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                    s.seat_class as s_seat_class, s.is_available,
-                    s.is_window, s.is_aisle,
-                    f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                    f.destination, f.departure_time, f.arrival_time,
-                    f.base_price_economy, f.base_price_business, f.base_price_first,
-                    f.available_economy, f.available_business, f.available_first,
-                    f.status as f_status, f.created_at as f_created_at,
-                    f.updated_at as f_updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats,
-                    a.economy_seats, a.business_seats, a.first_class_seats,
-                    p.id as p_id, p.user_id, p.first_name, p.last_name,
-                    p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                    p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                    u.id as u_id, u.email, u.password_hash, u.role,
-                    u.created_at as u_created_at, u.updated_at as u_updated_at
-                FROM bookings b
-                LEFT JOIN seats s ON b.seat_id = s.id
-                LEFT JOIN flights f ON b.flight_id = f.id
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                LEFT JOIN passengers p ON b.passenger_id = p.id
-                LEFT JOIN users u ON p.user_id = u.id
+                {_BOOKING_FULL_QUERY}
                 WHERE {where_sql}
                 ORDER BY b.booking_date DESC
                 LIMIT %s OFFSET %s
             """, params)
 
             rows = cursor.fetchall()
-
-            bookings = []
-            for row in rows:
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = row_to_seat({
-                        'id': row['s_id'],
-                        'flight_id': row['s_flight_id'],
-                        'seat_number': row['seat_number'],
-                        'seat_class': row['s_seat_class'],
-                        'is_available': row['is_available'],
-                        'is_window': row.get('is_window', False),
-                        'is_aisle': row.get('is_aisle', False)
-                    })
-
-                if row.get('f_id'):
-                    booking.flight = row_to_flight({
-                        'id': row['f_id'],
-                        'flight_number': row['flight_number'],
-                        'aircraft_id': row['aircraft_id'],
-                        'origin': row['origin'],
-                        'destination': row['destination'],
-                        'departure_time': row['departure_time'],
-                        'arrival_time': row['arrival_time'],
-                        'base_price_economy': row['base_price_economy'],
-                        'base_price_business': row['base_price_business'],
-                        'base_price_first': row['base_price_first'],
-                        'available_economy': row['available_economy'],
-                        'available_business': row['available_business'],
-                        'available_first': row['available_first'],
-                        'status': row['f_status'],
-                        'created_at': row.get('f_created_at'),
-                        'updated_at': row.get('f_updated_at')
-                    })
-
-                    if row.get('a_id'):
-                        booking.flight.aircraft = row_to_aircraft({
-                            'id': row['a_id'],
-                            'model': row['model'],
-                            'manufacturer': row['manufacturer'],
-                            'total_seats': row['total_seats'],
-                            'economy_seats': row['economy_seats'],
-                            'business_seats': row['business_seats'],
-                            'first_class_seats': row['first_class_seats']
-                        })
-
-                if row.get('p_id'):
-                    booking.passenger = row_to_passenger({
-                        'id': row['p_id'],
-                        'user_id': row['user_id'],
-                        'first_name': row['first_name'],
-                        'last_name': row['last_name'],
-                        'date_of_birth': row['date_of_birth'],
-                        'passport_number': row['passport_number'],
-                        'nationality': row['nationality'],
-                        'phone': row['phone'],
-                        'address': row.get('address'),
-                        'created_at': row.get('p_created_at'),
-                        'updated_at': row.get('p_updated_at')
-                    })
-
-                    if row.get('u_id'):
-                        booking.passenger.user = row_to_user({
-                            'id': row['u_id'],
-                            'email': row['email'],
-                            'password_hash': row['password_hash'],
-                            'role': row['role'],
-                            'created_at': row.get('u_created_at'),
-                            'updated_at': row.get('u_updated_at')
-                        })
-
-                bookings.append(booking)
-
-            return bookings
+            return [_build_booking_with_relations(row, include_aircraft=True, include_user=True) for row in rows]
 
     @staticmethod
     def search_bookings_by_reference(reference_query: str, limit: int = 100):
@@ -1247,114 +864,15 @@ class BookingService:
         pattern = f"%{reference_query.strip()}%"
 
         with db_manager.get_cursor() as cursor:
-            cursor.execute("""
-                SELECT
-                    b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                    b.seat_id, b.seat_class, b.price, b.status,
-                    b.booking_date, b.updated_at,
-                    s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                    s.seat_class as s_seat_class, s.is_available,
-                    s.is_window, s.is_aisle,
-                    f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                    f.destination, f.departure_time, f.arrival_time,
-                    f.base_price_economy, f.base_price_business, f.base_price_first,
-                    f.available_economy, f.available_business, f.available_first,
-                    f.status as f_status, f.created_at as f_created_at,
-                    f.updated_at as f_updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats,
-                    a.economy_seats, a.business_seats, a.first_class_seats,
-                    p.id as p_id, p.user_id, p.first_name, p.last_name,
-                    p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                    p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                    u.id as u_id, u.email, u.password_hash, u.role,
-                    u.created_at as u_created_at, u.updated_at as u_updated_at
-                FROM bookings b
-                LEFT JOIN seats s ON b.seat_id = s.id
-                LEFT JOIN flights f ON b.flight_id = f.id
-                LEFT JOIN aircraft a ON f.aircraft_id = a.id
-                LEFT JOIN passengers p ON b.passenger_id = p.id
-                LEFT JOIN users u ON p.user_id = u.id
+            cursor.execute(f"""
+                {_BOOKING_FULL_QUERY}
                 WHERE b.booking_reference ILIKE %s
                 ORDER BY b.booking_date DESC
                 LIMIT %s
             """, (pattern, limit))
 
             rows = cursor.fetchall()
-
-            bookings = []
-            for row in rows:
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = row_to_seat({
-                        'id': row['s_id'],
-                        'flight_id': row['s_flight_id'],
-                        'seat_number': row['seat_number'],
-                        'seat_class': row['s_seat_class'],
-                        'is_available': row['is_available'],
-                        'is_window': row.get('is_window', False),
-                        'is_aisle': row.get('is_aisle', False)
-                    })
-
-                if row.get('f_id'):
-                    booking.flight = row_to_flight({
-                        'id': row['f_id'],
-                        'flight_number': row['flight_number'],
-                        'aircraft_id': row['aircraft_id'],
-                        'origin': row['origin'],
-                        'destination': row['destination'],
-                        'departure_time': row['departure_time'],
-                        'arrival_time': row['arrival_time'],
-                        'base_price_economy': row['base_price_economy'],
-                        'base_price_business': row['base_price_business'],
-                        'base_price_first': row['base_price_first'],
-                        'available_economy': row['available_economy'],
-                        'available_business': row['available_business'],
-                        'available_first': row['available_first'],
-                        'status': row['f_status'],
-                        'created_at': row.get('f_created_at'),
-                        'updated_at': row.get('f_updated_at')
-                    })
-
-                    if row.get('a_id'):
-                        booking.flight.aircraft = row_to_aircraft({
-                            'id': row['a_id'],
-                            'model': row['model'],
-                            'manufacturer': row['manufacturer'],
-                            'total_seats': row['total_seats'],
-                            'economy_seats': row['economy_seats'],
-                            'business_seats': row['business_seats'],
-                            'first_class_seats': row['first_class_seats']
-                        })
-
-                if row.get('p_id'):
-                    booking.passenger = row_to_passenger({
-                        'id': row['p_id'],
-                        'user_id': row['user_id'],
-                        'first_name': row['first_name'],
-                        'last_name': row['last_name'],
-                        'date_of_birth': row['date_of_birth'],
-                        'passport_number': row['passport_number'],
-                        'nationality': row['nationality'],
-                        'phone': row['phone'],
-                        'address': row.get('address'),
-                        'created_at': row.get('p_created_at'),
-                        'updated_at': row.get('p_updated_at')
-                    })
-
-                    if row.get('u_id'):
-                        booking.passenger.user = row_to_user({
-                            'id': row['u_id'],
-                            'email': row['email'],
-                            'password_hash': row['password_hash'],
-                            'role': row['role'],
-                            'created_at': row.get('u_created_at'),
-                            'updated_at': row.get('u_updated_at')
-                        })
-
-                bookings.append(booking)
-
-            return bookings
+            return [_build_booking_with_relations(row, include_aircraft=True, include_user=True) for row in rows]
 
     @staticmethod
     def change_seat(booking_id: int, new_seat_number: str):
@@ -1392,14 +910,8 @@ class BookingService:
         with db_manager.serializable_transaction() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 # Get booking with current seat
-                cursor.execute("""
-                    SELECT
-                        b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                        b.seat_id, b.seat_class, b.price, b.status,
-                        b.booking_date, b.updated_at,
-                        s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                        s.seat_class as s_seat_class, s.is_available,
-                        s.is_window, s.is_aisle
+                cursor.execute(f"""
+                    SELECT b.*, {_SEAT_COLS}
                     FROM bookings b
                     LEFT JOIN seats s ON b.seat_id = s.id
                     WHERE b.id = %s
@@ -1410,17 +922,7 @@ class BookingService:
                     raise ValueError(f"Booking with ID {booking_id} not found")
 
                 booking = row_to_booking(booking_row)
-
-                if booking_row.get('s_id'):
-                    booking.seat = row_to_seat({
-                        'id': booking_row['s_id'],
-                        'flight_id': booking_row['s_flight_id'],
-                        'seat_number': booking_row['seat_number'],
-                        'seat_class': booking_row['s_seat_class'],
-                        'is_available': booking_row['is_available'],
-                        'is_window': booking_row.get('is_window', False),
-                        'is_aisle': booking_row.get('is_aisle', False)
-                    })
+                booking.seat = _build_seat_from_row(booking_row)
 
                 if booking.status not in [BookingStatus.PENDING, BookingStatus.CONFIRMED]:
                     raise ValueError(f"Cannot change seat for booking with status {booking.status.value}")
@@ -1457,97 +959,6 @@ class BookingService:
                     booking.seat = new_seat
 
                 # Fetch the complete booking with all joins
-                cursor.execute("""
-                    SELECT
-                        b.id, b.booking_reference, b.passenger_id, b.flight_id,
-                        b.seat_id, b.seat_class, b.price, b.status,
-                        b.booking_date, b.updated_at,
-                        s.id as s_id, s.flight_id as s_flight_id, s.seat_number,
-                        s.seat_class as s_seat_class, s.is_available,
-                        s.is_window, s.is_aisle,
-                        f.id as f_id, f.flight_number, f.aircraft_id, f.origin,
-                        f.destination, f.departure_time, f.arrival_time,
-                        f.base_price_economy, f.base_price_business, f.base_price_first,
-                        f.available_economy, f.available_business, f.available_first,
-                        f.status as f_status, f.created_at as f_created_at,
-                        f.updated_at as f_updated_at,
-                        p.id as p_id, p.user_id, p.first_name, p.last_name,
-                        p.date_of_birth, p.passport_number, p.nationality, p.phone,
-                        p.address, p.created_at as p_created_at, p.updated_at as p_updated_at,
-                        ff.id as ff_id, ff.passenger_id as ff_passenger_id,
-                        ff.membership_number, ff.points, ff.tier, ff.join_date,
-                        ff.last_flight_date, ff.updated_at as ff_updated_at
-                    FROM bookings b
-                    LEFT JOIN seats s ON b.seat_id = s.id
-                    LEFT JOIN flights f ON b.flight_id = f.id
-                    LEFT JOIN passengers p ON b.passenger_id = p.id
-                    LEFT JOIN frequent_flyers ff ON p.id = ff.passenger_id
-                    WHERE b.id = %s
-                """, (booking.id,))
-
+                cursor.execute(f"{_BOOKING_WITH_LOYALTY_QUERY} WHERE b.id = %s", (booking.id,))
                 row = cursor.fetchone()
-                if not row:
-                    return None
-
-                # Build booking object with relations
-                booking = row_to_booking(row)
-
-                if row.get('s_id'):
-                    booking.seat = Seat(
-                        id=row['s_id'],
-                        flight_id=row['s_flight_id'],
-                        seat_number=row['seat_number'],
-                        seat_class=SeatClass(row['s_seat_class']) if row['s_seat_class'] else None,
-                        is_available=row['is_available'],
-                        is_window=row.get('is_window', False),
-                        is_aisle=row.get('is_aisle', False)
-                    )
-
-                if row.get('f_id'):
-                    booking.flight = Flight(
-                        id=row['f_id'],
-                        flight_number=row['flight_number'],
-                        aircraft_id=row['aircraft_id'],
-                        origin=row['origin'],
-                        destination=row['destination'],
-                        departure_time=row['departure_time'],
-                        arrival_time=row['arrival_time'],
-                        base_price_economy=row['base_price_economy'],
-                        base_price_business=row['base_price_business'],
-                        base_price_first=row['base_price_first'],
-                        available_economy=row['available_economy'],
-                        available_business=row['available_business'],
-                        available_first=row['available_first'],
-                        status=row['f_status'],
-                        created_at=row.get('f_created_at'),
-                        updated_at=row.get('f_updated_at')
-                    )
-
-                if row.get('p_id'):
-                    booking.passenger = Passenger(
-                        id=row['p_id'],
-                        user_id=row['user_id'],
-                        first_name=row['first_name'],
-                        last_name=row['last_name'],
-                        date_of_birth=row['date_of_birth'],
-                        passport_number=row['passport_number'],
-                        nationality=row['nationality'],
-                        phone=row['phone'],
-                        address=row.get('address'),
-                        created_at=row.get('p_created_at'),
-                        updated_at=row.get('p_updated_at')
-                    )
-
-                    if row.get('ff_id'):
-                        booking.passenger.loyalty_account = FrequentFlyer(
-                            id=row['ff_id'],
-                            passenger_id=row['ff_passenger_id'],
-                            membership_number=row['membership_number'],
-                            points=row['points'],
-                            tier=LoyaltyTier(row['tier']) if row['tier'] else None,
-                            join_date=row.get('join_date'),
-                            last_flight_date=row.get('last_flight_date'),
-                            updated_at=row.get('ff_updated_at')
-                        )
-
-                return booking
+                return _build_booking_with_relations(row, include_loyalty=True)

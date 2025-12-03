@@ -6,22 +6,13 @@ import sys
 import os
 from datetime import datetime
 
-try:  # Prefer PyQt6 but fall back to PySide6 when unavailable
-    from PyQt6.QtWidgets import (
-        QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-        QTableWidget, QTableWidgetItem, QLabel, QLineEdit, QComboBox,
-        QDateEdit, QMessageBox, QDialog, QFormLayout, QTabWidget,
-        QHeaderView, QTextEdit, QCheckBox
-    )
-    from PyQt6.QtCore import Qt, QDate
-except ModuleNotFoundError:  # pragma: no cover - environment specific
-    from PySide6.QtWidgets import (
-        QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-        QTableWidget, QTableWidgetItem, QLabel, QLineEdit, QComboBox,
-        QDateEdit, QMessageBox, QDialog, QFormLayout, QTabWidget,
-        QHeaderView, QTextEdit, QCheckBox
-    )
-    from PySide6.QtCore import Qt, QDate
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QTableWidget, QTableWidgetItem, QLabel, QLineEdit, QComboBox,
+    QDateEdit, QMessageBox, QDialog, QFormLayout, QTabWidget,
+    QHeaderView, QTextEdit, QCheckBox
+)
+from PySide6.QtCore import Qt, QDate
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
