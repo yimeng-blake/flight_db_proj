@@ -20,8 +20,20 @@ if str(ROOT) not in sys.path:
 from backend.booking_service import BookingService
 from backend.flight_service import FlightService
 from backend.passenger_service import PassengerService
-from backend.auth_service import AuthService
-from database import SeatClass, UserRole, BookingStatus
+from database import SeatClass, UserRole, BookingStatus, row_to_user, get_db_manager
+
+
+def create_user_directly(email: str, role: UserRole):
+    """Create a user directly in the database without AuthService."""
+    db = get_db_manager()
+    with db.get_cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO users (email, password_hash, role)
+            VALUES (%s, %s, %s)
+            RETURNING id, email, password_hash, role, created_at, updated_at
+        """, (email, 'not_used', role.value))
+        row = cursor.fetchone()
+        return row_to_user(row)
 
 
 class TestConcurrentBooking:
@@ -31,11 +43,7 @@ class TestConcurrentBooking:
         """Helper to create multiple test passengers"""
         passengers = []
         for i in range(count):
-            user = AuthService.create_user(
-                email=f'user{i}@test.com',
-                password='password123',
-                role=UserRole.CUSTOMER
-            )
+            user = create_user_directly(f'user{i}@test.com', UserRole.CUSTOMER)
             passenger = PassengerService.create_passenger(
                 user_id=user.id,
                 first_name=f'User{i}',

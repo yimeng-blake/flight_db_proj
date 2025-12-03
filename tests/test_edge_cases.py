@@ -18,8 +18,20 @@ from backend.booking_service import BookingService
 from backend.flight_service import FlightService
 from backend.payment_service import PaymentService, MockPaymentGateway
 from backend.passenger_service import PassengerService
-from backend.auth_service import AuthService
-from database import SeatClass, BookingStatus, PaymentStatus, UserRole
+from database import SeatClass, BookingStatus, PaymentStatus, UserRole, row_to_user, get_db_manager
+
+
+def create_user_directly(email: str, role: UserRole):
+    """Create a user directly in the database without AuthService."""
+    db = get_db_manager()
+    with db.get_cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO users (email, password_hash, role)
+            VALUES (%s, %s, %s)
+            RETURNING id, email, password_hash, role, created_at, updated_at
+        """, (email, 'not_used', role.value))
+        row = cursor.fetchone()
+        return row_to_user(row)
 
 
 class TestPaymentFailures:
@@ -158,7 +170,7 @@ class TestOverbookingPrevention:
         )
 
         # Create two passengers
-        user1 = AuthService.create_user('user1@test.com', 'pass', UserRole.CUSTOMER)
+        user1 = create_user_directly('user1@test.com', UserRole.CUSTOMER)
         passenger1 = PassengerService.create_passenger(
             user_id=user1.id,
             first_name='User1',
@@ -169,7 +181,7 @@ class TestOverbookingPrevention:
             phone='+1111111111'
         )
 
-        user2 = AuthService.create_user('user2@test.com', 'pass', UserRole.CUSTOMER)
+        user2 = create_user_directly('user2@test.com', UserRole.CUSTOMER)
         passenger2 = PassengerService.create_passenger(
             user_id=user2.id,
             first_name='User2',
@@ -225,7 +237,7 @@ class TestOverbookingPrevention:
             base_price_first=600.0
         )
 
-        user = AuthService.create_user('user@test.com', 'pass', UserRole.CUSTOMER)
+        user = create_user_directly('user@test.com', UserRole.CUSTOMER)
         passenger = PassengerService.create_passenger(
             user_id=user.id,
             first_name='User',
@@ -401,7 +413,7 @@ class TestDataValidation:
 
     def test_duplicate_passport(self, db_manager, test_passenger):
         """Test duplicate passport numbers are rejected"""
-        user = AuthService.create_user('new@test.com', 'pass', UserRole.CUSTOMER)
+        user = create_user_directly('new@test.com', UserRole.CUSTOMER)
 
         with pytest.raises(ValueError, match="already exists"):
             PassengerService.create_passenger(

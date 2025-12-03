@@ -9,10 +9,21 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.database import DatabaseManager, set_db_manager
-from database import UserRole
-from backend.auth_service import AuthService
+from database import UserRole, row_to_user
 from backend.passenger_service import PassengerService
 from backend.flight_service import FlightService
+
+
+def create_user_directly(db, email: str, role: UserRole):
+    """Create a user directly in the database without AuthService."""
+    with db.get_cursor() as cursor:
+        cursor.execute("""
+            INSERT INTO users (email, password_hash, role)
+            VALUES (%s, %s, %s)
+            RETURNING id, email, password_hash, role, created_at, updated_at
+        """, (email, 'not_used', role.value))
+        row = cursor.fetchone()
+        return row_to_user(row)
 
 
 def pytest_addoption(parser):
@@ -87,23 +98,13 @@ def db_manager():
 @pytest.fixture(scope='function')
 def test_user(db_manager):
     """Create a test user"""
-    user = AuthService.create_user(
-        email='test@example.com',
-        password='password123',
-        role=UserRole.CUSTOMER
-    )
-    return user
+    return create_user_directly(db_manager, 'test@example.com', UserRole.CUSTOMER)
 
 
 @pytest.fixture(scope='function')
 def test_admin(db_manager):
     """Create a test admin user"""
-    user = AuthService.create_user(
-        email='admin@example.com',
-        password='admin123',
-        role=UserRole.ADMIN
-    )
-    return user
+    return create_user_directly(db_manager, 'admin@example.com', UserRole.ADMIN)
 
 
 @pytest.fixture(scope='function')

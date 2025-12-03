@@ -24,7 +24,6 @@ A comprehensive airline reservation system built with Python, PostgreSQL, and Py
 ```
 flight/
 ├── backend/                  # Business logic layer
-│   ├── auth_service.py      # Authentication and user management
 │   ├── flight_service.py    # Flight and aircraft operations
 │   ├── passenger_service.py # Passenger profile management
 │   ├── booking_service.py   # Booking with concurrency control
@@ -409,5 +408,4 @@ Total Points = Base Points × Class Multiplier × Tier Multiplier
 - Ticket: $500 (Economy)
 - Tier: Gold (1.5x)
 - Points Earned: 500 × 1 × 1.5 = 750 points
-
 

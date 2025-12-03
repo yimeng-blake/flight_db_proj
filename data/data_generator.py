@@ -13,12 +13,11 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.database import get_db_manager
-from backend.auth_service import AuthService
+from database import UserRole, SeatClass, row_to_user
 from backend.passenger_service import PassengerService
 from backend.flight_service import FlightService
 from backend.booking_service import BookingService
 from backend.payment_service import PaymentService, MockPaymentGateway
-from database import UserRole, SeatClass
 
 
 class DataGenerator:
@@ -114,60 +113,53 @@ class DataGenerator:
             List of created passengers
         """
         passengers = []
+        db_manager = get_db_manager()
 
         print(f"Generating {count} users and passengers...")
 
-        # Cache a single bcrypt hash so mass user creation stays fast
-        original_hash_fn = AuthService.hash_password
-        cached_hash = original_hash_fn('PerfTest#2024')
+        for i in range(count):
+            try:
+                # Generate user directly in database
+                email = self.faker.unique.email()
+                role = UserRole.ADMIN if i < 5 else UserRole.CUSTOMER  # First 5 are admins
 
-        def _fast_hash(_password: str, _cached=cached_hash):
-            return _cached
+                with db_manager.get_cursor() as cursor:
+                    cursor.execute("""
+                        INSERT INTO users (email, password_hash, role)
+                        VALUES (%s, %s, %s)
+                        RETURNING id, email, password_hash, role, created_at, updated_at
+                    """, (email, 'not_used', role.value))
+                    row = cursor.fetchone()
+                    user = row_to_user(row)
 
-        AuthService.hash_password = staticmethod(_fast_hash)
+                # Generate passenger profile
+                first_name = self.faker.first_name()
+                last_name = self.faker.last_name()
+                date_of_birth = self.faker.date_of_birth(minimum_age=18, maximum_age=80)
+                passport_number = self.faker.bothify(text='??######', letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+                nationality = self.faker.country()
+                # Generate phone number that fits in varchar(20)
+                phone = self.faker.bothify(text='+1-###-###-####')[:20]
+                address = self.faker.address()
 
-        try:
-            for i in range(count):
-                try:
-                    # Generate user
-                    email = self.faker.unique.email()
-                    password = 'password123'
-                    role = UserRole.ADMIN if i < 5 else UserRole.CUSTOMER  # First 5 are admins
+                passenger = PassengerService.create_passenger(
+                    user_id=user.id,
+                    first_name=first_name,
+                    last_name=last_name,
+                    date_of_birth=date_of_birth,
+                    passport_number=passport_number,
+                    nationality=nationality,
+                    phone=phone,
+                    address=address,
+                    create_loyalty_account=True
+                )
+                passengers.append(passenger)
 
-                    user = AuthService.create_user(email=email, password=password, role=role)
+                if (i + 1) % 100 == 0:
+                    print(f"  Created {i + 1}/{count} users/passengers")
 
-                    # Generate passenger profile
-                    first_name = self.faker.first_name()
-                    last_name = self.faker.last_name()
-                    date_of_birth = self.faker.date_of_birth(minimum_age=18, maximum_age=80)
-                    passport_number = self.faker.bothify(text='??######', letters='ABCDEFGHIJKLMNOPQRSTUVWXYZ')
-                    nationality = self.faker.country()
-                    # Generate phone number that fits in varchar(20)
-                    phone = self.faker.bothify(text='+1-###-###-####')[:20]
-                    address = self.faker.address()
-
-                    passenger = PassengerService.create_passenger(
-                        user_id=user.id,
-                        first_name=first_name,
-                        last_name=last_name,
-                        date_of_birth=date_of_birth,
-                        passport_number=passport_number,
-                        nationality=nationality,
-                        phone=phone,
-                        address=address,
-                        create_loyalty_account=True
-                    )
-                    passengers.append(passenger)
-
-                    if (i + 1) % 100 == 0:
-                        print(f"  Created {i + 1}/{count} users/passengers")
-
-                except Exception as e:
-                    print(f"  Error creating user/passenger: {e}")
-        finally:
-            # Restore original hashing so application logic outside the generator
-            # keeps its normal security characteristics.
-            AuthService.hash_password = staticmethod(original_hash_fn)
+            except Exception as e:
+                print(f"  Error creating user/passenger: {e}")
 
         print(f"Generated {len(passengers)} users/passengers")
         return passengers

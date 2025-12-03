@@ -13,45 +13,11 @@ from datetime import datetime, timedelta
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-from backend.auth_service import AuthService
 from backend.passenger_service import PassengerService
 from backend.flight_service import FlightService
 from backend.booking_service import BookingService
 from backend.payment_service import PaymentService
 from database import UserRole, SeatClass, BookingStatus, PaymentStatus, LoyaltyTier
-
-
-class TestAuthService:
-    """Test authentication and user management"""
-
-    def test_create_user(self, db_manager):
-        """Test user creation"""
-        user = AuthService.create_user('user@test.com', 'password123', UserRole.CUSTOMER)
-        assert user.id is not None
-        assert user.email == 'user@test.com'
-        assert user.role == UserRole.CUSTOMER
-
-    def test_duplicate_user(self, db_manager, test_user):
-        """Test duplicate user creation fails"""
-        with pytest.raises(ValueError):
-            AuthService.create_user('test@example.com', 'password123')
-
-    def test_authenticate(self, db_manager, test_user):
-        """Test user authentication"""
-        user = AuthService.authenticate('test@example.com', 'password123')
-        assert user is not None
-        assert user.id == test_user.id
-
-    def test_authenticate_wrong_password(self, db_manager, test_user):
-        """Test authentication with wrong password"""
-        user = AuthService.authenticate('test@example.com', 'wrongpassword')
-        assert user is None
-
-    def test_password_hashing(self, db_manager):
-        """Test password is properly hashed"""
-        user = AuthService.create_user('hash@test.com', 'mypassword')
-        assert user.password_hash != 'mypassword'
-        assert AuthService.verify_password('mypassword', user.password_hash)
 
 
 class TestPassengerService:

@@ -127,34 +127,6 @@ python database/database.py
 python data/data_generator.py --type large --passengers 500 --bookings 1500
 ```
 
-### Create Admin User Manually
-```python
-from backend.auth_service import AuthService
-from backend.passenger_service import PassengerService
-from database import UserRole
-from datetime import datetime
-
-# Create admin user
-admin = AuthService.create_user(
-    email='admin@airline.com',
-    password='admin123',
-    role=UserRole.ADMIN
-)
-
-# Create passenger profile
-passenger = PassengerService.create_passenger(
-    user_id=admin.id,
-    first_name='Admin',
-    last_name='User',
-    date_of_birth=datetime(1980, 1, 1),
-    passport_number='ADMIN001',
-    nationality='USA',
-    phone='+1234567890'
-)
-
-print(f"Admin created with Passenger ID: {passenger.id}")
-```
-
 ## Troubleshooting
 
 ### "No module named 'PyQt6'"
@@ -191,7 +163,6 @@ flight/
 ├── .env                     ← Database configuration (create from .env.example)
 │
 ├── backend/                 ← Business logic
-│   ├── auth_service.py
 │   ├── flight_service.py
 │   ├── passenger_service.py
 │   ├── booking_service.py

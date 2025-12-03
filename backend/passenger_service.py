@@ -263,17 +263,7 @@ class PassengerService:
 
         with db_manager.get_cursor() as cursor:
             cursor.execute("""
-                SELECT
-                    b.id, b.booking_reference, b.passenger_id, b.flight_id, b.seat_id,
-                    b.seat_class, b.price, b.status, b.booking_date, b.updated_at,
-                    f.id as f_id, f.flight_number, f.aircraft_id, f.origin, f.destination,
-                    f.departure_time, f.arrival_time, f.base_price_economy, f.base_price_business,
-                    f.base_price_first, f.available_economy, f.available_business, f.available_first,
-                    f.status as f_status, f.created_at as f_created_at, f.updated_at as f_updated_at,
-                    a.id as a_id, a.model, a.manufacturer, a.total_seats, a.economy_seats,
-                    a.business_seats, a.first_class_seats,
-                    s.id as s_id, s.flight_id as s_flight_id, s.seat_number, s.seat_class as s_seat_class,
-                    s.is_available, s.is_window, s.is_aisle
+                SELECT b.*, f.*, a.*, s.*
                 FROM bookings b
                 LEFT JOIN flights f ON b.flight_id = f.id
                 LEFT JOIN aircraft a ON f.aircraft_id = a.id
